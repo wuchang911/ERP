@@ -67,7 +67,6 @@ st.sidebar.subheader("🧮 簡易計算機")
 calc_exp = st.sidebar.text_input("輸入算式 (如: 500*1.05)")
 if calc_exp:
     try:
-        # 清理字元並計算
         clean_exp = calc_exp.replace('x', '*').replace('÷', '/')
         res = eval(clean_exp, {"__builtins__": None}, {})
         st.sidebar.success(f"結果: {res}")
@@ -82,7 +81,7 @@ if st.sidebar.button("登出系統"):
 menu = ["📊 庫存預警與報表", "📝 進出貨登記", "🍎 商品設定與拍照"]
 choice = st.sidebar.selectbox("切換功能", menu)
 
-# --- 功能 1：庫存預警與報表 (含歷史追溯與匯出) ---
+# --- 功能 1：庫存預警與報表 (修正單位顯示) ---
 if choice == "📊 庫存預警與報表":
     st.subheader("📦 即時庫存監控")
     query = """
@@ -116,7 +115,16 @@ if choice == "📊 庫存預警與報表":
 
     st.divider()
     st.subheader("📜 歷史紀錄與數據匯出")
-    history_df = pd.read_sql_query("SELECT name as 商品, type as 類型, qty as 數量, price_at_time as 單價, date as 日期 FROM logs ORDER BY id DESC", conn)
+    
+    # 修正重點：使用 JOIN 關聯 products 表來取得對應的單位 unit
+    history_query = """
+    SELECT l.name as 商品, l.type as 類型, l.qty || ' ' || p.unit as 數量單位, 
+           l.price_at_time as 單價, l.date as 日期 
+    FROM logs l
+    JOIN products p ON l.name = p.name
+    ORDER BY l.id DESC
+    """
+    history_df = pd.read_sql_query(history_query, conn)
     
     col_dl1, col_dl2 = st.columns(2)
     with col_dl1:
@@ -135,7 +143,7 @@ if choice == "📊 庫存預警與報表":
 elif choice == "📝 進出貨登記":
     st.subheader("📝 進銷貨登記")
     c.execute("SELECT name FROM products")
-    items = [r[0] for r in c.fetchall()]
+    items = [r[0] for r in c.fetchall()] # 修正為提取單一欄位
     if not items:
         st.warning("⚠️ 請先建立商品資料。")
     else:
@@ -146,7 +154,12 @@ elif choice == "📝 進出貨登記":
             st.info(f"💡 目前系統庫存：{current_stock}")
             col_q, col_u = st.columns(2)
             with col_q: t_qty = st.number_input("數量", min_value=1, step=1)
-            with col_u: t_unit = st.selectbox("單位", options=UNIT_OPTIONS)
+            with col_u:
+                # 自動抓取該商品的預設單位
+                c.execute("SELECT unit FROM products WHERE name = ?", (t_name,))
+                default_unit = c.fetchone()[0]
+                t_unit = st.selectbox("單位確認", options=UNIT_OPTIONS, index=UNIT_OPTIONS.index(default_unit))
+            
             t_price = st.number_input("單價 (TW$)", min_value=0.0, value=300.0)
             t_date = st.date_input("日期", datetime.now())
             if st.form_submit_button("確認提交"):
