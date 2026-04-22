@@ -1,290 +1,171 @@
-from collections import defaultdict
-from pathlib import Path
-import sqlite3
-
+# -*- coding: utf-8 -*-
 import streamlit as st
-import altair as alt
 import pandas as pd
+import sqlite3
+import base64
+from PIL import Image
+import io
+from datetime import datetime
 
+# --- 0. 頁面基本設定 (必須在最上方) ---
+st.set_page_config(page_title="專業進銷存管理系統", layout="wide")
 
-# Set the title and favicon that appear in the Browser's tab bar.
-st.set_page_config(
-    page_title="Inventory tracker",
-    page_icon=":shopping_bags:",  # This is an emoji shortcode. Could be a URL too.
-)
+# --- 1. 登入密碼檢查邏輯 ---
+def check_password():
+    if "password_correct" not in st.session_state:
+        st.session_state["password_correct"] = False
 
+    if st.session_state["password_correct"]:
+        return True
 
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
+    st.title("🔐 系統安全登入")
+    pwd = st.text_input("請輸入管理員密碼", type="password")
+    if st.button("登入"):
+        if pwd == "888888":  # <--- 在這裡修改你的專屬密碼
+            st.session_state["password_correct"] = True
+            st.rerun()
+        else:
+            st.error("😕 密碼錯誤，請重試")
+    return False
 
-
-def connect_db():
-    """Connects to the sqlite database."""
-
-    DB_FILENAME = Path(__file__).parent / "inventory.db"
-    db_already_exists = DB_FILENAME.exists()
-
-    conn = sqlite3.connect(DB_FILENAME)
-    db_was_just_created = not db_already_exists
-
-    return conn, db_was_just_created
-
-
-def initialize_data(conn):
-    """Initializes the inventory table with some data."""
-    cursor = conn.cursor()
-
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS inventory (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            item_name TEXT,
-            price REAL,
-            units_sold INTEGER,
-            units_left INTEGER,
-            cost_price REAL,
-            reorder_point INTEGER,
-            description TEXT
-        )
-        """
-    )
-
-    cursor.execute(
-        """
-        INSERT INTO inventory
-            (item_name, price, units_sold, units_left, cost_price, reorder_point, description)
-        VALUES
-            -- Beverages
-            ('Bottled Water (500ml)', 1.50, 115, 15, 0.80, 16, 'Hydrating bottled water'),
-            ('Soda (355ml)', 2.00, 93, 8, 1.20, 10, 'Carbonated soft drink'),
-            ('Energy Drink (250ml)', 2.50, 12, 18, 1.50, 8, 'High-caffeine energy drink'),
-            ('Coffee (hot, large)', 2.75, 11, 14, 1.80, 5, 'Freshly brewed hot coffee'),
-            ('Juice (200ml)', 2.25, 11, 9, 1.30, 5, 'Fruit juice blend'),
-
-            -- Snacks
-            ('Potato Chips (small)', 2.00, 34, 16, 1.00, 10, 'Salted and crispy potato chips'),
-            ('Candy Bar', 1.50, 6, 19, 0.80, 15, 'Chocolate and candy bar'),
-            ('Granola Bar', 2.25, 3, 12, 1.30, 8, 'Healthy and nutritious granola bar'),
-            ('Cookies (pack of 6)', 2.50, 8, 8, 1.50, 5, 'Soft and chewy cookies'),
-            ('Fruit Snack Pack', 1.75, 5, 10, 1.00, 8, 'Assortment of dried fruits and nuts'),
-
-            -- Personal Care
-            ('Toothpaste', 3.50, 1, 9, 2.00, 5, 'Minty toothpaste for oral hygiene'),
-            ('Hand Sanitizer (small)', 2.00, 2, 13, 1.20, 8, 'Small sanitizer bottle for on-the-go'),
-            ('Pain Relievers (pack)', 5.00, 1, 5, 3.00, 3, 'Over-the-counter pain relief medication'),
-            ('Bandages (box)', 3.00, 0, 10, 2.00, 5, 'Box of adhesive bandages for minor cuts'),
-            ('Sunscreen (small)', 5.50, 6, 5, 3.50, 3, 'Small bottle of sunscreen for sun protection'),
-
-            -- Household
-            ('Batteries (AA, pack of 4)', 4.00, 1, 5, 2.50, 3, 'Pack of 4 AA batteries'),
-            ('Light Bulbs (LED, 2-pack)', 6.00, 3, 3, 4.00, 2, 'Energy-efficient LED light bulbs'),
-            ('Trash Bags (small, 10-pack)', 3.00, 5, 10, 2.00, 5, 'Small trash bags for everyday use'),
-            ('Paper Towels (single roll)', 2.50, 3, 8, 1.50, 5, 'Single roll of paper towels'),
-            ('Multi-Surface Cleaner', 4.50, 2, 5, 3.00, 3, 'All-purpose cleaning spray'),
-
-            -- Others
-            ('Lottery Tickets', 2.00, 17, 20, 1.50, 10, 'Assorted lottery tickets'),
-            ('Newspaper', 1.50, 22, 20, 1.00, 5, 'Daily newspaper')
-        """
-    )
+# --- 只有登入成功才執行以下內容 ---
+if check_password():
+    # --- 2. 資料庫初始化 ---
+    conn = sqlite3.connect('erp_v10_final.db', check_same_thread=False)
+    c = conn.cursor()
+    c.execute('PRAGMA encoding = "UTF-8"')
+    c.execute('''CREATE TABLE IF NOT EXISTS products 
+                 (name TEXT PRIMARY KEY, cost REAL, price REAL, unit TEXT, 
+                  alert_level INTEGER, image_data TEXT, last_updated TEXT, description TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS logs 
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, type TEXT, 
+                  qty INTEGER, price REAL, date TEXT)''')
     conn.commit()
 
-
-def load_data(conn):
-    """Loads the inventory data from the database."""
-    cursor = conn.cursor()
-
-    try:
-        cursor.execute("SELECT * FROM inventory")
-        data = cursor.fetchall()
-    except:
+    # 工具函式
+    def image_to_base64(image_file):
+        if image_file is not None:
+            try:
+                img = Image.open(image_file).convert("RGB")
+                img.thumbnail((400, 400)) 
+                buffered = io.BytesIO()
+                img.save(buffered, format="JPEG", quality=85)
+                return base64.b64encode(buffered.getvalue()).decode('utf-8')
+            except: return None
         return None
 
-    df = pd.DataFrame(
-        data,
-        columns=[
-            "id",
-            "item_name",
-            "price",
-            "units_sold",
-            "units_left",
-            "cost_price",
-            "reorder_point",
-            "description",
-        ],
-    )
+    # CSS 樣式
+    st.markdown("""<style>
+        body { font-family: "PingFang TC", sans-serif; } 
+        .stock-highlight { font-size: 22px; font-weight: bold; }
+        .desc-label { color: #555; font-size: 14px; background: #f0f2f6; padding: 8px; border-radius: 5px; margin: 5px 0; }
+    </style>""", unsafe_allow_html=True)
 
-    return df
+    # 側邊欄
+    st.sidebar.header("⚙️ 系統設定")
+    currency_map = {"TWD (TW$)": "TW$", "USD (US$)": "US$", "HKD (HK$)": "HK$", "CNY (¥)": "¥"}
+    curr_key = st.sidebar.selectbox("貨幣單位", list(currency_map.keys()))
+    symbol = currency_map[curr_key]
+    if st.sidebar.button("登出系統"):
+        st.session_state["password_correct"] = False
+        st.rerun()
 
+    menu = ["📊 庫存預警", "📝 進出登記", "📜 歷史追溯", "🍎 商品管理"]
+    choice = st.sidebar.selectbox("功能選單", menu)
 
-def update_data(conn, df, changes):
-    """Updates the inventory data in the database."""
-    cursor = conn.cursor()
+    # --- A. 庫存預警 ---
+    if choice == "📊 庫存預警":
+        st.subheader(f"即時庫存狀況 ({curr_key})")
+        df_p = pd.read_sql_query("SELECT * FROM products", conn)
+        df_l = pd.read_sql_query("SELECT * FROM logs", conn)
+        
+        if df_p.empty:
+            st.info("請先前往「商品管理」新增商品。")
+        else:
+            total_all_profit = 0
+            display_list = []
+            for _, p in df_p.iterrows():
+                item_logs = df_l[df_l['name'] == p['name']]
+                in_qty = item_logs[item_logs['type'] == '進貨']['qty'].sum()
+                out_qty = item_logs[item_logs['type'] == '出貨']['qty'].sum()
+                # 實際獲利 = (銷售總額) - (售出數量 * 成本)
+                sales_val = (item_logs[item_logs['type'] == '出貨']['qty'] * item_logs[item_logs['type'] == '出貨']['price']).sum()
+                cost_val = out_qty * p['cost']
+                profit = sales_val - cost_val
+                total_all_profit += profit
+                display_list.append({**p, "stock": in_qty - out_qty, "profit": profit})
 
-    if changes["edited_rows"]:
-        deltas = st.session_state.inventory_table["edited_rows"]
-        rows = []
+            st.metric("總累計毛利", f"{symbol} {total_all_profit:,.0f}")
+            cols = st.columns(3)
+            for idx, item in enumerate(display_list):
+                with cols[idx % 3]:
+                    if item['image_data']: st.image(f"data:image/jpeg;base64,{item['image_data']}", use_container_width=True)
+                    st.markdown(f"### {item['name']}")
+                    color = "red" if item['stock'] <= item['alert_level'] else "#1E88E5"
+                    st.markdown(f"庫存：<span class='stock-highlight' style='color:{color};'>{int(item['stock'])}</span> {item['unit']}", unsafe_allow_html=True)
+                    if item['description']: st.markdown(f"<div class='desc-label'>📖 {item['description']}</div>", unsafe_allow_html=True)
+                    st.write(f"定價：{symbol} {item['price']:,.0f} | 獲利：{symbol} {item['profit']:,.0f}")
+                    st.write("---")
 
-        for i, delta in deltas.items():
-            row_dict = df.iloc[i].to_dict()
-            row_dict.update(delta)
-            rows.append(row_dict)
+    # --- B. 進出登記 ---
+    elif choice == "📝 進出登記":
+        st.subheader("📝 進銷貨登記")
+        prods = pd.read_sql_query("SELECT * FROM products", conn)
+        if prods.empty: st.warning("請先設定商品資料")
+        else:
+            with st.form("log_form", clear_on_submit=True):
+                t_type = st.radio("交易類型", ["進貨", "出貨"], horizontal=True)
+                t_name = st.selectbox("品項名稱", prods['name'])
+                row = prods[prods['name'] == t_name].iloc[0]
+                def_price = float(row['cost'] if t_type == "進貨" else row['price'])
+                
+                c1, c2 = st.columns(2)
+                with c1: t_qty = st.number_input(f"數量 ({row['unit']})", min_value=1, step=1)
+                with c2: t_prc = st.number_input(f"單價 ({symbol})", value=def_price)
+                t_date = st.date_input("日期", datetime.now())
+                if st.form_submit_button("確認提交紀錄"):
+                    c.execute("INSERT INTO logs (name, type, qty, price, date) VALUES (?,?,?,?,?)",
+                              (t_name, t_type, t_qty, t_prc, t_date.strftime("%Y-%m-%d")))
+                    conn.commit()
+                    st.success(f"登記成功！")
+                    st.rerun()
 
-        cursor.executemany(
-            """
-            UPDATE inventory
-            SET
-                item_name = :item_name,
-                price = :price,
-                units_sold = :units_sold,
-                units_left = :units_left,
-                cost_price = :cost_price,
-                reorder_point = :reorder_point,
-                description = :description
-            WHERE id = :id
-            """,
-            rows,
-        )
+    # --- C. 歷史追溯 ---
+    elif choice == "📜 歷史追溯":
+        st.subheader("📜 交易紀錄管理")
+        df_h = pd.read_sql_query("SELECT id, date as 日期, name as 品項, type as 類型, qty as 數量, price as 單價 FROM logs ORDER BY date DESC, id DESC", conn)
+        if not df_h.empty:
+            df_h['總額'] = df_h['數量'] * df_h['單價']
+            st.dataframe(df_h.drop(columns=['id']), use_container_width=True)
+            st.write("---")
+            log_id = st.selectbox("選擇紀錄 ID 以刪除", df_h['id'].tolist())
+            if st.button("確認刪除該筆紀錄"):
+                c.execute("DELETE FROM logs WHERE id = ?", (log_id,))
+                conn.commit()
+                st.rerun()
+        else: st.info("尚無紀錄")
 
-    if changes["added_rows"]:
-        cursor.executemany(
-            """
-            INSERT INTO inventory
-                (id, item_name, price, units_sold, units_left, cost_price, reorder_point, description)
-            VALUES
-                (:id, :item_name, :price, :units_sold, :units_left, :cost_price, :reorder_point, :description)
-            """,
-            (defaultdict(lambda: None, row) for row in changes["added_rows"]),
-        )
+    # --- D. 商品管理 ---
+    elif choice == "🍎 商品管理":
+        st.subheader("🍎 商品資料維護")
+        with st.form("add_p", clear_on_submit=True):
+            n = st.text_input("商品名稱")
+            desc = st.text_area("詳細內容備註")
+            c1, c2 = st.columns(2); unit = c1.selectbox("單位", ["個", "件", "台", "公斤", "箱", "瓶"]); alrt = c2.number_input("預警水位", min_value=0, value=5)
+            c3, c4 = st.columns(2); cst = c3.number_input(f"成本 ({symbol})", min_value=0.0); prc = c4.number_input(f"定價 ({symbol})", min_value=0.0)
+            img = st.camera_input("📷 商品拍照")
+            if st.form_submit_button("儲存商品"):
+                if n:
+                    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+                    c.execute("INSERT OR REPLACE INTO products VALUES (?,?,?,?,?,?,?,?)", (n, cst, prc, unit, alrt, image_to_base64(img), now, desc))
+                    conn.commit()
+                    st.success("商品已儲存"); st.rerun()
+        
+        st.write("---")
+        del_list = pd.read_sql_query("SELECT name FROM products", conn)
+        if not del_list.empty:
+            target = st.selectbox("選擇要刪除的商品", del_list['name'])
+            if st.button(f"永久刪除 {target}"):
+                c.execute("DELETE FROM products WHERE name = ?", (target,))
+                conn.commit(); st.rerun()
 
-    if changes["deleted_rows"]:
-        cursor.executemany(
-            "DELETE FROM inventory WHERE id = :id",
-            ({"id": int(df.loc[i, "id"])} for i in changes["deleted_rows"]),
-        )
-
-    conn.commit()
-
-
-# -----------------------------------------------------------------------------
-# Draw the actual page, starting with the inventory table.
-
-# Set the title that appears at the top of the page.
-"""
-# :shopping_bags: Inventory tracker
-
-**Welcome to Alice's Corner Store's intentory tracker!**
-This page reads and writes directly from/to our inventory database.
-"""
-
-st.info(
-    """
-    Use the table below to add, remove, and edit items.
-    And don't forget to commit your changes when you're done.
-    """
-)
-
-# Connect to database and create table if needed
-conn, db_was_just_created = connect_db()
-
-# Initialize data.
-if db_was_just_created:
-    initialize_data(conn)
-    st.toast("Database initialized with some sample data.")
-
-# Load data from database
-df = load_data(conn)
-
-# Display data with editable table
-edited_df = st.data_editor(
-    df,
-    disabled=["id"],  # Don't allow editing the 'id' column.
-    num_rows="dynamic",  # Allow appending/deleting rows.
-    column_config={
-        # Show dollar sign before price columns.
-        "price": st.column_config.NumberColumn(format="$%.2f"),
-        "cost_price": st.column_config.NumberColumn(format="$%.2f"),
-    },
-    key="inventory_table",
-)
-
-has_uncommitted_changes = any(len(v) for v in st.session_state.inventory_table.values())
-
-st.button(
-    "Commit changes",
-    type="primary",
-    disabled=not has_uncommitted_changes,
-    # Update data in database
-    on_click=update_data,
-    args=(conn, df, st.session_state.inventory_table),
-)
-
-
-# -----------------------------------------------------------------------------
-# Now some cool charts
-
-# Add some space
-""
-""
-""
-
-st.subheader("Units left", divider="red")
-
-need_to_reorder = df[df["units_left"] < df["reorder_point"]].loc[:, "item_name"]
-
-if len(need_to_reorder) > 0:
-    items = "\n".join(f"* {name}" for name in need_to_reorder)
-
-    st.error(f"We're running dangerously low on the items below:\n {items}")
-
-""
-""
-
-st.altair_chart(
-    # Layer 1: Bar chart.
-    alt.Chart(df)
-    .mark_bar(
-        orient="horizontal",
-    )
-    .encode(
-        x="units_left",
-        y="item_name",
-    )
-    # Layer 2: Chart showing the reorder point.
-    + alt.Chart(df)
-    .mark_point(
-        shape="diamond",
-        filled=True,
-        size=50,
-        color="salmon",
-        opacity=1,
-    )
-    .encode(
-        x="reorder_point",
-        y="item_name",
-    ),
-    use_container_width=True,
-)
-
-st.caption("NOTE: The :diamonds: location shows the reorder point.")
-
-""
-""
-""
-
-# -----------------------------------------------------------------------------
-
-st.subheader("Best sellers", divider="orange")
-
-""
-""
-
-st.altair_chart(
-    alt.Chart(df)
-    .mark_bar(orient="horizontal")
-    .encode(
-        x="units_sold",
-        y=alt.Y("item_name").sort("-x"),
-    ),
-    use_container_width=True,
-)
