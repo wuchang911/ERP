@@ -8,35 +8,20 @@ from datetime import datetime
 
 # --- 0. 登入密碼驗證功能 ---
 def check_password():
-    """只有輸入正確密碼才會顯示主程式"""
-    def password_entered():
-        # 你可以在這裡修改你的密碼，目前設定為 8888
-        if st.session_state["password"] == "8888":
-            st.session_state["password_correct"] = True
-            del st.session_state["password"]  # 清除密碼暫存增加安全性
-        else:
-            st.session_state["password_correct"] = False
-
     if "password_correct" not in st.session_state:
-        # 第一次進入
         st.title("🔒 企業管理系統登入")
-        st.text_input("請輸入進入密碼", type="password", on_change=password_entered, key="password")
+        pwd = st.text_input("請輸入進入密碼", type="password")
+        if st.button("登入"):
+            if pwd == "8888": # 你可以在這裡修改密碼
+                st.session_state["password_correct"] = True
+                st.rerun()
+            else:
+                st.error("❌ 密碼錯誤")
         return False
-    elif not st.session_state["password_correct"]:
-        # 密碼輸入錯誤
-        st.title("🔒 企業管理系統登入")
-        st.text_input("密碼不正確，請重新輸入", type="password", on_change=password_entered, key="password")
-        st.error("❌ 密碼錯誤，請聯繫管理員。")
-        return False
-    else:
-        # 密碼正確
-        return True
+    return True
 
-# 執行驗證，若失敗則停止執行後續程式
 if not check_password():
     st.stop()
-
-# --- 以下為原本的進銷存邏輯 (密碼通過後才會執行) ---
 
 # --- 1. 資料庫初始化 ---
 conn = sqlite3.connect('business_final.db', check_same_thread=False)
@@ -50,7 +35,7 @@ c.execute('''CREATE TABLE IF NOT EXISTS logs
               price_at_time REAL, date TEXT)''')
 conn.commit()
 
-# --- 2. 頁面設定 ---
+# --- 2. 頁面設定與全域變數 ---
 st.set_page_config(page_title="雲端進銷存系統", layout="wide", page_icon="📦")
 UNIT_OPTIONS = ["箱", "件", "顆", "包", "袋", "兩", "支", "公斤", "打"]
 
@@ -69,12 +54,15 @@ def get_current_stock(product_name):
                  SUM(CASE WHEN type = '進貨' THEN qty ELSE 0 END) - 
                  SUM(CASE WHEN type = '出貨' THEN qty ELSE 0 END) 
                  FROM logs WHERE name = ?""", (product_name,))
-    result = c.fetchone()[0]
-    return result if result is not None else 0
+    res = c.fetchone()[0]
+    return res if res is not None else 0
 
 # --- 4. 側邊導覽欄 ---
 st.sidebar.title("🏢 企業管理系統")
-st.sidebar.success("✅ 已登入")
+if st.sidebar.button("登出系統"):
+    del st.session_state["password_correct"]
+    st.rerun()
+
 menu = ["📊 庫存預警與報表", "📝 進出貨登記", "🍎 商品設定與拍照"]
 choice = st.sidebar.selectbox("切換功能", menu)
 
@@ -105,9 +93,10 @@ if choice == "📊 庫存預警與報表":
                 color = "#FF4B4B" if is_low else "#00A000"
                 st.markdown(f"**{row['name']}**")
                 st.markdown(f"庫存：<span style='color:{color}; font-size:18px; font-weight:bold;'>{row['stock']} {row['unit']}</span>", unsafe_allow_html=True)
+                if is_low: st.caption("⚠️ 補貨警告")
                 st.divider()
 
-# --- 功能 2：進出貨登記 ---
+# --- 功能 2：進出貨登記 (加入需求大於供給提醒) ---
 elif choice == "📝 進出貨登記":
     st.subheader("📝 進銷貨登記")
     c.execute("SELECT name FROM products")
@@ -131,42 +120,49 @@ elif choice == "📝 進出貨登記":
             
             if st.form_submit_button("確認提交"):
                 if t_type == "出貨" and t_qty > current_stock:
-                    st.error(f"❌ 庫存不足！無法出貨。")
+                    st.error(f"❌ 庫存不足！需求({t_qty}) 大於 供給({current_stock})。")
                 else:
                     c.execute("INSERT INTO logs (name, type, qty, price_at_time, date) VALUES (?,?,?,?,?)",
                               (t_name, t_type, t_qty, t_price, t_date.strftime("%Y/%m/%d")))
                     conn.commit()
-                    st.success(f"✅ 登記成功")
+                    st.success(f"✅ 成功登記")
 
-# --- 功能 3：商品設定與拍照 ---
+# --- 功能 3：商品設定與拍照 (即時重複提醒) ---
 elif choice == "🍎 商品設定與拍照":
     st.subheader("⚙️ 商品資料維護")
     c.execute("SELECT name FROM products")
     existing_names = [r[0] for r in c.fetchall()]
     
-    with st.form("product_form"):
-        name = st.text_input("商品名稱")
+    # 即時偵測移到 Form 之外
+    name = st.text_input("1. 輸入商品名稱 (輸入完點擊空白處檢查重複)")
+    is_duplicate = False
+    if name:
         if name in existing_names:
-            st.warning(f"⚠️ 『{name}』已存在，儲存將覆蓋舊資料。")
-            
+            st.warning(f"⚠️ 提醒：『{name}』已存在，儲存將覆蓋舊資料。")
+            is_duplicate = True
+        else:
+            st.success(f"✅ 『{name}』是新商品")
+
+    with st.form("product_form"):
+        st.write("2. 填寫詳細資料")
         col1, col2 = st.columns(2)
         with col1: cost = st.number_input("預設成本", min_value=0.0)
         with col2: price = st.number_input("預設售價", min_value=0.0)
         
-        unit = st.selectbox("預設單位", options=UNIT_OPTIONS)
-        alert = st.number_input("預警水位", min_value=0, value=5)
+        col3, col4 = st.columns(2)
+        with col3: unit = st.selectbox("預設單位", options=UNIT_OPTIONS)
+        with col4: alert = st.number_input("預警水位", min_value=0, value=5)
+        
         cam_image = st.camera_input("拍照")
         
-        if st.form_submit_button("儲存商品"):
+        submit_label = "更新現有商品" if is_duplicate else "儲存新商品"
+        if st.form_submit_button(submit_label):
             if not name:
                 st.error("❌ 請輸入名稱")
             else:
                 img_b64 = image_to_base64(cam_image)
-                c.execute("INSERT OR REPLACE INTO products VALUES (NULL,?,?,?,?,?,?)", 
+                c.execute("INSERT OR REPLACE INTO products (name, cost, price, unit, alert_level, image_data) VALUES (?,?,?,?,?,?)", 
                           (name, cost, price, unit, alert, img_b64))
                 conn.commit()
-                st.success(f"🎉 '{name}' 已存檔！")
-
-if st.sidebar.button("登出系統"):
-    del st.session_state["password_correct"]
-    st.rerun()
+                st.success(f"🎉 '{name}' 資料已同步！")
+                st.balloons()
