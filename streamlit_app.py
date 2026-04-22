@@ -6,13 +6,13 @@ from PIL import Image
 import io
 from datetime import datetime
 
-# --- 0. 登入密碼驗證功能 ---
+# --- 0. 登入密碼驗證功能 (密碼: 8888) ---
 def check_password():
     if "password_correct" not in st.session_state:
         st.title("🔒 企業管理系統登入")
         pwd = st.text_input("請輸入進入密碼", type="password")
         if st.button("登入"):
-            if pwd == "8888": # 你可以在這裡修改密碼
+            if pwd == "8888":
                 st.session_state["password_correct"] = True
                 st.rerun()
             else:
@@ -24,29 +24,32 @@ if not check_password():
     st.stop()
 
 # --- 1. 資料庫初始化 ---
-conn = sqlite3.connect('business_final.db', check_same_thread=False)
+conn = sqlite3.connect('business_pro_v3.db', check_same_thread=False)
 c = conn.cursor()
 
+# 建立表格：增加 description 欄位
 c.execute('''CREATE TABLE IF NOT EXISTS products 
              (id INTEGER PRIMARY KEY, name TEXT UNIQUE, cost REAL, price REAL, 
-              unit TEXT, alert_level INTEGER, image_data TEXT)''')
+              unit TEXT, alert_level INTEGER, image_data TEXT, description TEXT)''')
 c.execute('''CREATE TABLE IF NOT EXISTS logs 
              (id INTEGER PRIMARY KEY, name TEXT, type TEXT, qty INTEGER, 
               price_at_time REAL, date TEXT)''')
 conn.commit()
 
-# --- 2. 頁面設定與全域變數 ---
+# --- 2. 頁面設定 ---
 st.set_page_config(page_title="雲端進銷存系統", layout="wide", page_icon="📦")
 UNIT_OPTIONS = ["箱", "件", "顆", "包", "袋", "兩", "支", "公斤", "打"]
 
 # --- 3. 工具函數 ---
 def image_to_base64(image_file):
     if image_file is not None:
-        img = Image.open(image_file)
-        img.thumbnail((400, 400)) 
-        buffered = io.BytesIO()
-        img.save(buffered, format="JPEG")
-        return base64.b64encode(buffered.getvalue()).decode()
+        try:
+            img = Image.open(image_file)
+            img.thumbnail((400, 400)) 
+            buffered = io.BytesIO()
+            img.save(buffered, format="JPEG")
+            return base64.b64encode(buffered.getvalue()).decode()
+        except: return None
     return None
 
 def get_current_stock(product_name):
@@ -70,7 +73,7 @@ choice = st.sidebar.selectbox("切換功能", menu)
 if choice == "📊 庫存預警與報表":
     st.subheader("📦 即時庫存監控")
     query = """
-    SELECT p.name, p.unit, p.alert_level, p.cost, p.price, p.image_data,
+    SELECT p.name, p.unit, p.alert_level, p.cost, p.price, p.image_data, p.description,
            SUM(CASE WHEN l.type = '進貨' THEN l.qty ELSE 0 END) - 
            SUM(CASE WHEN l.type = '出貨' THEN l.qty ELSE 0 END) as stock,
            SUM(CASE WHEN l.type = '出貨' THEN l.qty ELSE 0 END) * (p.price - p.cost) as profit
@@ -89,14 +92,21 @@ if choice == "📊 庫存預警與報表":
             with cols[idx % len(cols)]:
                 if row['image_data']:
                     st.image(f"data:image/jpeg;base64,{row['image_data']}", use_container_width=True)
+                
                 is_low = row['stock'] <= row['alert_level']
                 color = "#FF4B4B" if is_low else "#00A000"
-                st.markdown(f"**{row['name']}**")
+                st.markdown(f"### {row['name']}")
                 st.markdown(f"庫存：<span style='color:{color}; font-size:18px; font-weight:bold;'>{row['stock']} {row['unit']}</span>", unsafe_allow_html=True)
-                if is_low: st.caption("⚠️ 補貨警告")
+                
+                # 顯示詳細敘述
+                if row['description']:
+                    with st.expander("📝 查看詳細敘述"):
+                        st.write(row['description'])
+                
+                if is_low: st.warning("⚠️ 補貨警告")
                 st.divider()
 
-# --- 功能 2：進出貨登記 (加入需求大於供給提醒) ---
+# --- 功能 2：進出貨登記 ---
 elif choice == "📝 進出貨登記":
     st.subheader("📝 進銷貨登記")
     c.execute("SELECT name FROM products")
@@ -125,15 +135,14 @@ elif choice == "📝 進出貨登記":
                     c.execute("INSERT INTO logs (name, type, qty, price_at_time, date) VALUES (?,?,?,?,?)",
                               (t_name, t_type, t_qty, t_price, t_date.strftime("%Y/%m/%d")))
                     conn.commit()
-                    st.success(f"✅ 成功登記")
+                    st.success(f"✅ 登記成功")
 
-# --- 功能 3：商品設定與拍照 (即時重複提醒) ---
+# --- 功能 3：商品設定與拍照 (含詳細敘述) ---
 elif choice == "🍎 商品設定與拍照":
     st.subheader("⚙️ 商品資料維護")
     c.execute("SELECT name FROM products")
     existing_names = [r[0] for r in c.fetchall()]
     
-    # 即時偵測移到 Form 之外
     name = st.text_input("1. 輸入商品名稱 (輸入完點擊空白處檢查重複)")
     is_duplicate = False
     if name:
@@ -153,6 +162,9 @@ elif choice == "🍎 商品設定與拍照":
         with col3: unit = st.selectbox("預設單位", options=UNIT_OPTIONS)
         with col4: alert = st.number_input("預警水位", min_value=0, value=5)
         
+        # 補回詳細敘述欄位
+        description = st.text_area("商品詳細敘述 (規格、產地、存放等)", placeholder="請輸入商品資訊...")
+        
         cam_image = st.camera_input("拍照")
         
         submit_label = "更新現有商品" if is_duplicate else "儲存新商品"
@@ -161,8 +173,11 @@ elif choice == "🍎 商品設定與拍照":
                 st.error("❌ 請輸入名稱")
             else:
                 img_b64 = image_to_base64(cam_image)
-                c.execute("INSERT OR REPLACE INTO products (name, cost, price, unit, alert_level, image_data) VALUES (?,?,?,?,?,?)", 
-                          (name, cost, price, unit, alert, img_b64))
+                # 儲存包含 description 的完整資料
+                c.execute("""INSERT OR REPLACE INTO products 
+                             (name, cost, price, unit, alert_level, image_data, description) 
+                             VALUES (?,?,?,?,?,?,?)""", 
+                          (name, cost, price, unit, alert, img_b64, description))
                 conn.commit()
-                st.success(f"🎉 '{name}' 資料已同步！")
+                st.success(f"🎉 '{name}' 資料與敘述已同步！")
                 st.balloons()
