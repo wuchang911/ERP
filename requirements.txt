@@ -1,5 +1,4 @@
 streamlit
 pandas
 Pillow
-streamlit-barcode-reader
-
+streamlit-camera-qr
