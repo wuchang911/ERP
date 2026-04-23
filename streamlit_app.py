@@ -5,12 +5,11 @@ import base64
 from PIL import Image
 import io
 from datetime import datetime
+from streamlit_barcode_reader import streamlit_barcode_reader
 
-# --- 1. 資料庫初始化 (自動修復舊欄位) ---
+# --- 1. 資料庫初始化 ---
 conn = sqlite3.connect('business_pro_v6.db', check_same_thread=False)
 c = conn.cursor()
-
-# 建立基礎表格
 c.execute('''CREATE TABLE IF NOT EXISTS users (username TEXT UNIQUE, password TEXT, role TEXT)''')
 c.execute('''CREATE TABLE IF NOT EXISTS products 
              (name TEXT UNIQUE, cost REAL, price REAL, big_unit TEXT, small_unit TEXT, 
@@ -18,13 +17,6 @@ c.execute('''CREATE TABLE IF NOT EXISTS products
 c.execute('''CREATE TABLE IF NOT EXISTS logs 
              (id INTEGER PRIMARY KEY, name TEXT, type TEXT, qty INTEGER, unit TEXT, 
               price_at_time REAL, date TEXT, operator TEXT)''')
-
-# --- 💡 關鍵修復：手動補齊可能缺失的欄位 ---
-try: c.execute("ALTER TABLE logs ADD COLUMN operator TEXT"); conn.commit()
-except: pass
-try: c.execute("ALTER TABLE products ADD COLUMN description TEXT"); conn.commit()
-except: pass
-
 c.execute("INSERT OR IGNORE INTO users VALUES ('admin', '8888', 'admin')")
 conn.commit()
 
@@ -39,17 +31,18 @@ if "user" not in st.session_state:
         if res:
             st.session_state["user"], st.session_state["role"] = res[0], res[1]
             st.rerun()
-        else: st.error("❌ 帳號或密碼錯誤")
+        else: st.error("❌ 帳密錯誤")
     st.stop()
+
+current_user = st.session_state["user"]
+current_role = st.session_state["role"]
 
 # --- 3. 工具函數 ---
 def image_to_base64(image_file):
     if image_file:
-        try:
-            img = Image.open(image_file); img.thumbnail((400, 400))
-            buf = io.BytesIO(); img.save(buf, format="JPEG")
-            return base64.b64encode(buf.getvalue()).decode()
-        except: return None
+        img = Image.open(image_file); img.thumbnail((400, 400))
+        buf = io.BytesIO(); img.save(buf, format="JPEG")
+        return base64.b64encode(buf.getvalue()).decode()
     return None
 
 def get_stock_and_profit(name):
@@ -70,90 +63,78 @@ def get_stock_and_profit(name):
     return total_small_qty, total_profit, display_stock, ratio
 
 # --- 4. 側邊欄 ---
-st.sidebar.title(f"👤 {st.session_state['user']}")
-if st.session_state["role"] == "admin":
-    with st.sidebar.expander("👤 帳號管理"):
-        new_u = st.text_input("新增員工帳號")
-        new_p = st.text_input("密碼設定", type="password")
-        if st.button("建立"):
-            c.execute("INSERT OR REPLACE INTO users VALUES (?,?,'staff')", (new_u, new_p))
-            conn.commit(); st.success(f"已建立 {new_u}")
-    system_lock = st.sidebar.toggle("🔒 盤點鎖定", value=False)
-else: system_lock = False
-
+st.sidebar.title(f"👤 {current_user}")
+system_lock = st.sidebar.toggle("🔒 盤點鎖定", value=False) if current_role == "admin" else False
 if st.sidebar.button("登出系統"):
-    del st.session_state["user"]; st.session_state.pop("role"); st.rerun()
+    del st.session_state["user"]; st.rerun()
 
-# --- 5. 主選單 ---
 menu = ["📊 庫存報表", "📝 進出貨登記", "🍎 商品設定"]
-if st.session_state["role"] != "admin": menu.remove("🍎 商品設定")
+if current_role != "admin": menu.remove("🍎 商品設定")
 choice = st.sidebar.selectbox("切換功能", menu)
 
-# --- 功能：進出貨登記 (BUG 修正核心) ---
+# --- 功能：進出貨登記 (支援掃描) ---
 if choice == "📝 進出貨登記":
-    st.subheader("📝 手動進銷貨登記")
-    if system_lock: st.error("🛑 系統鎖定中，暫停登記")
+    st.subheader("📝 登記進銷貨")
+    if system_lock: st.error("🛑 系統鎖定中")
     else:
-        c.execute("SELECT name, big_unit, small_unit FROM products")
-        prods = c.fetchall()
-        if not prods: st.warning("⚠️ 請先前往『商品設定』建立商品")
-        else:
-            # 修正：提取純文字列表，避免 selectbox 報錯
-            p_names = [p[0] for p in prods]
-            target_p = st.selectbox("品項選擇", options=p_names)
-            
-            # 抓取該品項單位資訊
+        # 掃描區塊
+        with st.expander("📷 掃描條碼選取商品"):
+            scanned_code = streamlit_barcode_reader()
+            if scanned_code: st.success(f"掃描成功：{scanned_code}")
+        
+        c.execute("SELECT name FROM products")
+        p_names = [p[0] for p in c.fetchall()]
+        
+        idx = 0
+        if scanned_code in p_names: idx = p_names.index(scanned_code)
+        
+        target_p = st.selectbox("品項選擇", options=p_names, index=idx)
+        
+        if target_p:
             c.execute("SELECT big_unit, small_unit FROM products WHERE name=?", (target_p,))
-            units_info = c.fetchone()
+            u_info = c.fetchone()
+            s_qty, _, d_stock, _ = get_stock_and_profit(target_p)
+            st.info(f"💡 目前庫存：{d_stock}")
             
             with st.form("trade_form"):
                 t_type = st.radio("類型", ["進貨", "出貨"], horizontal=True)
-                s_qty, _, d_stock, _ = get_stock_and_profit(target_p)
-                st.info(f"💡 目前庫存：{d_stock}")
-                
                 col1, col2 = st.columns(2)
                 with col1: t_qty = st.number_input("數量", min_value=1, step=1)
-                with col2: t_unit = st.selectbox("單位", options=list(units_info)) # 確保為字串清單
-                
+                with col2: t_unit = st.selectbox("單位", options=list(u_info))
                 t_price = st.number_input("單價 (TW$)", min_value=0.0)
-                # 💡 重要：form 內必須有 submit button 且不能有 if 回調
-                submitted = st.form_submit_button("確認提交紀錄")
-                
-                if submitted:
-                    c.execute("SELECT ratio FROM products WHERE name=?", (target_p,))
-                    ratio = c.fetchone()[0]
-                    tx_small_qty = t_qty * ratio if t_unit == units_info[0] else t_qty
-                    
-                    if t_type == "出貨" and tx_small_qty > s_qty:
-                        st.error("❌ 庫存不足！")
-                    else:
-                        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        c.execute("INSERT INTO logs (name, type, qty, unit, price_at_time, date, operator) VALUES (?,?,?,?,?,?,?)", 
-                                  (target_p, t_type, t_qty, t_unit, t_price, now_str, st.session_state["user"]))
-                        conn.commit(); st.success("✅ 登記成功！"); st.balloons()
+                if st.form_submit_button("確認提交"):
+                    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    c.execute("INSERT INTO logs (name, type, qty, unit, price_at_time, date, operator) VALUES (?,?,?,?,?,?,?)", 
+                              (target_p, t_type, t_qty, t_unit, t_price, now, current_user))
+                    conn.commit(); st.success("✅ 登記完成"); st.balloons()
 
-# --- 其餘功能保持穩定性 ---
-elif choice == "📊 庫存報表":
-    st.subheader("📦 即時庫存報表")
-    c.execute("SELECT name, image_data, description FROM products")
-    for n, img, desc in c.fetchall():
-        s_qty, profit, d_stock, _ = get_stock_and_profit(n)
-        st.write(f"### {n}")
-        if img: st.image(f"data:image/jpeg;base64,{img}", width=200)
-        st.write(f"庫存：{d_stock}")
-        if st.session_state["role"] == "admin": st.write(f"預估利潤：${profit:,.0f}")
-        st.divider()
-
+# --- 功能：商品設定 (支援掃描建檔) ---
 elif choice == "🍎 商品設定":
     st.subheader("🍎 商品維護")
+    with st.expander("📷 掃描商品條碼建檔"):
+        new_code = streamlit_barcode_reader()
+        if new_code: st.info(f"掃描到的編號：{new_code}")
+
     with st.form("new_p_form"):
-        n = st.text_input("商品名")
+        # 如果有掃描到，就直接填入名稱欄位
+        n = st.text_input("商品名稱 (可直接填寫或由上方掃描)", value=new_code if new_code else "")
         b, s, r = st.text_input("大單位", value="箱"), st.text_input("小單位", value="顆"), st.number_input("換算率", min_value=1)
-        cost, price = st.number_input("成本"), st.number_input("售價")
+        cost, price = st.number_input("整箱成本"), st.number_input("單顆售價")
         desc = st.text_area("描述")
-        cam = st.camera_input("拍照")
-        if st.form_submit_button("儲存"):
+        cam = st.camera_input("商品照片")
+        if st.form_submit_button("儲存商品"):
             img_b = image_to_base64(cam)
-            c.execute("INSERT OR REPLACE INTO products VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                      (n, cost, price, b, s, r, 5, img_b, desc, st.session_state["user"], datetime.now().strftime("%Y-%m-%d")))
+            now = datetime.now().strftime("%Y-%m-%d")
+            c.execute("INSERT OR REPLACE INTO products (name, cost, price, big_unit, small_unit, ratio, alert_level, image_data, description, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                      (n, cost, price, b, s, r, 5, img_b, desc, current_user, now))
             conn.commit(); st.success("已更新"); st.rerun()
+
+elif choice == "📊 庫存報表":
+    st.subheader("📦 即時報表")
+    c.execute("SELECT name, image_data, description FROM products")
+    for n, img, desc in c.fetchall():
+        _, _, d_stock, _ = get_stock_and_profit(n)
+        st.write(f"### {n}")
+        if img: st.image(f"data:image/jpeg;base64,{img}", width=150)
+        st.write(f"即時庫存：{d_stock}")
+        st.divider()
