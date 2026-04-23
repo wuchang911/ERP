@@ -10,7 +10,7 @@ import google.generativeai as genai
 # --- 1. 介面與資料庫初始化 ---
 st.set_page_config(page_title="AI 智能進銷存系統", layout="wide", page_icon="🚀")
 
-# 這裡代入您提供的 API Key
+# 這裡已經幫您填入 API Key
 GEMINI_API_KEY = "AIzaSyABZQs_7pzPFRmx9ky8eaeQfqZTnf1ELOY"
 
 conn = sqlite3.connect('business_v16.db', check_same_thread=False)
@@ -52,21 +52,23 @@ def get_stock_and_profit(name):
     display_stock = f"{t_small_qty // ratio} {big_u} {t_small_qty % ratio} {small_u}"
     return t_small_qty, t_profit, display_stock, ratio
 
-# --- 💡 AI 分析核心 (已整合 API Key) ---
+# --- 💡 核心修正：穩定版 AI 分析函數 ---
 def run_ai_analysis(inventory_summary, sales_summary):
     try:
         genai.configure(api_key=GEMINI_API_KEY)
+        # 修正：直接指定穩定模型名稱
         model = genai.GenerativeModel('gemini-1.5-flash')
+        
         prompt = f"""
-        你是一位專業的ERP營運分析師。請根據以下數據提供3條具體經營建議：
-        目前的庫存狀況：{inventory_summary}
-        最近的銷售明細：{sales_summary}
-        請針對補貨優先級、獲利優化進行分析。用繁體中文回答，語氣專業精簡。
+        你是一位專業的進銷存分析師。請根據數據提供3條建議：
+        庫存現狀：{inventory_summary}
+        最近銷售：{sales_summary}
+        請針對「補貨」與「利潤」回覆繁體中文，語氣精簡。
         """
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
-        return f"AI 診斷暫時無法連線，請檢查 API Key 權限或稍後再試。錯誤：{str(e)}"
+        return f"AI 診斷連線異常，請確認 API Key 是否有效。詳細錯誤：{str(e)}"
 
 # --- 3. 登入系統 ---
 if "user" not in st.session_state:
@@ -77,21 +79,21 @@ if "user" not in st.session_state:
         c.execute("SELECT username, role FROM users WHERE username=? AND password=?", (u, p))
         res = c.fetchone()
         if res:
-            st.session_state["user"], st.session_state["role"] = res[0], res[1]
+            st.session_state["user"], st.session_state["role"] = res, res
             st.rerun()
         else: st.error("❌ 帳密錯誤")
     st.stop()
 
 current_user, current_role = st.session_state["user"], st.session_state["role"]
 
-# --- 4. ➕ 快速操作選單 (AI 助手已就緒) ---
+# --- 4. ➕ 快速操作選單 ---
 def quick_action_menu():
     with st.popover("➕ 快速操作 (AI診斷/工具)"):
         st.subheader("🤖 AI 營運助手")
         if st.button("✨ 執行 AI 數據分析"):
             with st.spinner("AI 正在閱讀您的報表..."):
                 c.execute("SELECT name FROM products")
-                inv_data = [f"{n[0]}: {get_stock_and_profit(n[0])[2]}" for n in c.fetchall()]
+                inv_data = [f"{n}: {get_stock_and_profit(n)}" for n in c.fetchall()]
                 logs_df = pd.read_sql_query("SELECT * FROM logs ORDER BY id DESC LIMIT 15", conn)
                 report = run_ai_analysis(str(inv_data), logs_df.to_string())
                 st.info(report)
@@ -118,7 +120,7 @@ menu = ["📊 庫存報表", "📝 進出貨登記"]
 if current_role == "admin": menu.append("🍎 商品維護設定")
 choice = st.sidebar.selectbox("切換功能", menu)
 
-# --- 模組功能：報表 ---
+# --- 報表功能 ---
 if choice == "📊 庫存報表":
     st.subheader("📦 即時庫存監控")
     quick_action_menu()
@@ -143,15 +145,15 @@ if choice == "📊 庫存報表":
     h_df = pd.read_sql_query("SELECT name, type, qty, unit, operator, date FROM logs ORDER BY id DESC LIMIT 50", conn)
     st.dataframe(h_df, use_container_width=True)
 
-# --- 模組功能：登記 ---
+# --- 登記功能 ---
 elif choice == "📝 進出貨登記":
     st.subheader("📝 登記進銷貨")
     quick_action_menu()
     if st.session_state.get('is_locked', False): st.error("🛑 系統鎖定中")
     else:
         c.execute("SELECT name FROM products")
-        names = [r[0] for r in c.fetchall()]
-        scan = st.text_input("📷 掃描/搜尋品項 (鍵盤相機)")
+        names = [r for r in c.fetchall()]
+        scan = st.text_input("📷 掃描/搜尋品項 (iOS長按選掃描條碼)")
         idx = names.index(scan) if scan in names else 0
         target = st.selectbox("品項確認", options=names, index=idx)
         if target:
@@ -172,20 +174,20 @@ elif choice == "📝 進出貨登記":
                                   (target, t_type, t_qty, t_unit, t_price, datetime.now().strftime("%Y-%m-%d %H:%M"), current_user))
                         conn.commit(); st.success("✅ 成功"); st.balloons()
 
-# --- 模組功能：商品設定 ---
+# --- 設定功能 ---
 elif choice == "🍎 商品維護設定":
-    st.subheader("🍎 商品資料與定價")
+    st.subheader("🍎 商品維護與定價")
     quick_action_menu()
     c.execute("SELECT name FROM products")
-    exists = ["+ 新增商品"] + [r[0] for r in c.fetchall()]
+    exists = ["+ 新增商品"] + [r for r in c.fetchall()]
     mode = st.selectbox("編輯對象", exists)
-    iv = {"n":"","c":0.0,"p":0.0,"bu":"箱","su":"顆","r":10,"d":"","img":None,"a":5}
+    iv = {"n":"","c":0.0,"p":0.0,"bu":"箱","su":"顆","r":10,"d":"","img":None}
     if mode != "+ 新增商品":
         c.execute("SELECT * FROM products WHERE name=?", (mode,))
         p = c.fetchone()
-        if p: iv = {"n":p[0],"c":p[1],"p":p[2],"bu":p[3],"su":p[4],"r":p[5],"a":p[6],"img":p[7],"d":p[8]}
+        if p: iv = {"n":p,"c":p,"p":p,"bu":p,"su":p,"r":p,"img":p,"d":p}
 
-    name = st.text_input("品名 (條碼)", value=iv["n"])
+    name = st.text_input("品名", value=iv["n"])
     col1, col2, col3 = st.columns(3)
     with col1: b_u = st.text_input("大單位", value=iv["bu"])
     with col2: s_u = st.text_input("小單位", value=iv["su"])
