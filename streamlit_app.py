@@ -5,9 +5,8 @@ import base64
 from PIL import Image
 import io
 from datetime import datetime
-from streamlit_camera_qr import barcode_scanner # 換成這個套件
 
-# --- 1. 資料庫初始化 ---
+# --- 1. 資料庫與權限初始化 ---
 conn = sqlite3.connect('business_pro_v6.db', check_same_thread=False)
 c = conn.cursor()
 c.execute('''CREATE TABLE IF NOT EXISTS users (username TEXT UNIQUE, password TEXT, role TEXT)''')
@@ -29,7 +28,7 @@ if "user" not in st.session_state:
         c.execute("SELECT username, role FROM users WHERE username=? AND password=?", (u, p))
         res = c.fetchone()
         if res:
-            st.session_state["user"], st.session_state["role"] = res[0], res[1]
+            st.session_state["user"], st.session_state["role"] = res, res
             st.rerun()
         else: st.error("❌ 帳密錯誤")
     st.stop()
@@ -72,15 +71,14 @@ menu = ["📊 庫存報表", "📝 進出貨登記", "🍎 商品設定"]
 if current_role != "admin": menu.remove("🍎 商品設定")
 choice = st.sidebar.selectbox("切換功能", menu)
 
-# --- 功能：進出貨登記 (支援 QR/條碼掃描) ---
+# --- 功能：進出貨登記 (使用文字框手動掃描或輸入) ---
 if choice == "📝 進出貨登記":
     st.subheader("📝 登記進銷貨")
     if system_lock: st.error("🛑 系統鎖定中")
     else:
-        st.write("📷 掃描商品條碼")
-        # 啟動掃描器
-        scanned_code = barcode_scanner()
-        if scanned_code: st.success(f"已掃描到：{scanned_code}")
+        # 由於套件問題，我們改用「自動聚焦文字框」來配合 iPhone 的相機掃描
+        st.info("💡 提示：點擊下方框框後，可使用 iPhone 鍵盤上方的『掃描文字/條碼』功能")
+        scanned_code = st.text_input("點此掃描條碼", placeholder="請掃描或輸入商品名稱")
         
         c.execute("SELECT name FROM products")
         p_names = [p[0] for p in c.fetchall()]
@@ -89,7 +87,7 @@ if choice == "📝 進出貨登記":
         if scanned_code in p_names: 
             idx = p_names.index(scanned_code)
         
-        target_p = st.selectbox("品項選擇", options=p_names, index=idx)
+        target_p = st.selectbox("品項確認", options=p_names, index=idx)
         
         if target_p:
             c.execute("SELECT big_unit, small_unit FROM products WHERE name=?", (target_p,))
@@ -107,17 +105,13 @@ if choice == "📝 進出貨登記":
                     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     c.execute("INSERT INTO logs (name, type, qty, unit, price_at_time, date, operator) VALUES (?,?,?,?,?,?,?)", 
                               (target_p, t_type, t_qty, t_unit, t_price, now, current_user))
-                    conn.commit(); st.success("✅ 登記完成"); st.balloons()
+                    conn.commit(); st.success("✅ 登記成功！"); st.balloons()
 
-# --- 功能：商品設定 (支援掃描建檔) ---
+# --- 其餘功能保持穩定 ---
 elif choice == "🍎 商品設定":
     st.subheader("🍎 商品維護")
-    st.write("📷 掃描條碼建檔")
-    new_code = barcode_scanner()
-    if new_code: st.info(f"掃描結果：{new_code}")
-
     with st.form("new_p_form"):
-        n = st.text_input("商品名稱 (條碼編號)", value=new_code if new_code else "")
+        n = st.text_input("商品名稱 (可點此掃描條碼填入)")
         b, s, r = st.text_input("大單位", value="箱"), st.text_input("小單位", value="顆"), st.number_input("換算率", min_value=1)
         cost, price = st.number_input("整箱成本"), st.number_input("單顆售價")
         desc = st.text_area("描述")
@@ -132,7 +126,8 @@ elif choice == "🍎 商品設定":
 elif choice == "📊 庫存報表":
     st.subheader("📦 即時報表")
     c.execute("SELECT name, image_data, description FROM products")
-    for n, img, desc in c.fetchall():
+    prods = c.fetchall()
+    for n, img, desc in prods:
         _, _, d_stock, _ = get_stock_and_profit(n)
         st.write(f"### {n}")
         if img: st.image(f"data:image/jpeg;base64,{img}", width=150)
