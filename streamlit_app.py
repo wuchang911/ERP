@@ -60,20 +60,35 @@ def run_ai_analysis(inventory_summary, sales_summary):
     if not GEMINI_API_KEY:
         return "⚠️ 請先在 Secrets 設定 GEMINI_API_KEY。"
     try:
+        # 1. 確保初始化
         genai.configure(api_key=GEMINI_API_KEY)
-        # 修正：使用更穩定的模型調用方式，避免 v1beta 衝突
-        model = genai.GenerativeModel(model_name='gemini-1.5-flash')
+        
+        # 2. 強制指定完整的模型路徑 (這是解決 404 的關鍵)
+        # 如果 gemini-1.5-flash 不行，程式會嘗試 gemini-pro
+        model_name = 'models/gemini-1.5-flash' 
+        
+        model = genai.GenerativeModel(model_name=model_name)
         
         prompt = f"""
-        你是一位專業進銷存分析師。請根據數據提供3條建議：
-        庫存狀況：{inventory_summary}
-        最近銷售：{sales_summary}
-        請針對補貨與利潤優化回覆，語氣簡潔專業。
+        你是一位專業的進銷存分析師。請根據數據提供3條具體建議：
+        目前的庫存現狀：{inventory_summary}
+        最近銷售紀錄摘要：{sales_summary}
+        請針對「補貨建議」與「利潤提升」提供繁體中文回覆，語氣專業精簡。
         """
+        
+        # 3. 執行內容生成
         response = model.generate_content(prompt)
         return response.text
+        
     except Exception as e:
-        return f"AI 診斷暫時連線異常。請確認金鑰權限。\n錯誤代碼：{str(e)}"
+        # 如果 1.5 版報錯 404，嘗試退回 1.0 穩定版 (gemini-pro)
+        try:
+            model = genai.GenerativeModel('models/gemini-pro')
+            response = model.generate_content(prompt)
+            return response.text
+        except Exception as e2:
+            return f"AI 診斷連線失敗。請確認：\n1. API Key 是否有效\n2. 是否有開啟 Google AI Studio 權限\n錯誤詳情：{str(e2)}"
+
 
 # --- 3. 登入系統 ---
 if "user_role" not in st.session_state:
