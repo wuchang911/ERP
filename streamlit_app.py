@@ -55,37 +55,46 @@ def get_stock_and_profit(name):
     display_stock = f"{t_small_qty // ratio} {big_u} {t_small_qty % ratio} {small_u}"
     return t_small_qty, t_profit, display_stock, ratio
 
-# --- 💡 終極修正：升級為 Gemini 2.0 模型並解決版本衝突 ---
 def run_ai_analysis(inventory_summary, sales_summary):
     if not GEMINI_API_KEY:
         return "⚠️ 請先在 Secrets 設定 GEMINI_API_KEY。"
     try:
-        # 1. 初始化設定
+        # 1. 初始化
         genai.configure(api_key=GEMINI_API_KEY)
         
-        # 2. 核心修正：改用目前最先進且支援度最高的 gemini-2.0-flash
-        # 這種寫法能繞過舊版 v1beta 的 404 限制
-        model = genai.GenerativeModel('gemini-2.0-flash')
+        # 2. 自動尋找您帳號權限內可用的模型 (核心修正)
+        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        
+        # 優先順序：2.0-flash > 1.5-flash > 1.5-pro > gemini-pro
+        target_model = None
+        for preferred in ['models/gemini-2.0-flash', 'models/gemini-1.5-flash', 'models/gemini-pro']:
+            if preferred in available_models:
+                target_model = preferred
+                break
+        
+        if not target_model:
+            # 如果找不到預設的，就抓清單第一個可用的
+            target_model = available_models[0] if available_models else None
+
+        if not target_model:
+            return "❌ 您的 API Key 目前沒有可用模型，請確認 Google AI Studio 權限。"
+
+        # 3. 建立模型並生成
+        model = genai.GenerativeModel(target_model)
         
         prompt = f"""
-        你是一位專業的進銷存營運分析師。請根據以下數據提供3條具體的經營建議：
-        目前的庫存現狀：{inventory_summary}
-        最近銷售紀錄摘要：{sales_summary}
-        請針對「補貨建議」與「利潤提升」提供繁體中文回覆，語氣專業精簡。
+        你是一位專業營運分析師。請根據數據提供3條建議：
+        目前的庫存：{inventory_summary}
+        最近的銷售：{sales_summary}
+        請用繁體中文回覆，語氣簡潔。
         """
         
-        # 3. 執行生成
         response = model.generate_content(prompt)
         return response.text
         
     except Exception as e:
-        # 如果 2.0 也報錯，則嘗試最後一個穩定路徑
-        try:
-            model = genai.GenerativeModel('models/gemini-1.5-flash-latest')
-            response = model.generate_content(prompt)
-            return response.text
-        except Exception as e2:
-            return f"AI 診斷連線失敗。請確認：\n1. 您的金鑰是否為最新申請\n2. GitHub 的 requirements.txt 版本是否正確\n詳細錯誤：{str(e2)}"
+        return f"AI 診斷失敗。這通常是 Google 伺服器同步問題，建議更換新 API Key。\n詳細錯誤：{str(e)}"
+
 
 
 
