@@ -65,12 +65,12 @@ def run_ai_analysis(inventory_summary, sales_summary):
         # 2. 自動尋找您帳號權限內可用的模型 (核心修正)
         available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
         
-        # 優先順序：2.0-flash > 1.5-flash > 1.5-pro > gemini-pro
-        target_model = None
-        for preferred in ['models/gemini-2.0-flash', 'models/gemini-1.5-flash', 'models/gemini-pro']:
+                # 修改優先順序，先用 1.5-flash，通常免費額度較穩定
+        for preferred in ['models/gemini-1.5-flash', 'models/gemini-2.0-flash', 'models/gemini-pro']:
             if preferred in available_models:
                 target_model = preferred
                 break
+
         
         if not target_model:
             # 如果找不到預設的，就抓清單第一個可用的
