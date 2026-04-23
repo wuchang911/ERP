@@ -11,7 +11,7 @@ import google.generativeai as genai
 st.set_page_config(page_title="AI 智能進銷存系統", layout="wide", page_icon="🚀")
 
 # 這裡代入您提供的 API Key
-GEMINI_API_KEY = "AIzaSyBRV5aqbQluf9YW6p6fUXF9vcazxxjRtnk"
+GEMINI_API_KEY = "AIzaSyABZQs_7pzPFRmx9ky8eaeQfqZTnf1ELOY"
 
 conn = sqlite3.connect('business_v16.db', check_same_thread=False)
 c = conn.cursor()
