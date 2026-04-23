@@ -10,13 +10,13 @@ import google.generativeai as genai
 # --- 1. 介面與資料庫初始化 ---
 st.set_page_config(page_title="AI 智能進銷存系統", layout="wide", page_icon="🚀")
 
-# --- 💡 安全修正：從 Streamlit Secrets 讀取 Key，不再公開 ---
+# 🔐 安全讀取金鑰 (從 Secrets 讀取，防止被 Google 偵測公開而封鎖)
 try:
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 except:
-    GEMINI_API_KEY = "" # 若本機測試則預設為空
+    GEMINI_API_KEY = ""
 
-conn = sqlite3.connect('business_v16.db', check_same_thread=False)
+conn = sqlite3.connect('business_v20.db', check_same_thread=False)
 c = conn.cursor()
 c.execute('''CREATE TABLE IF NOT EXISTS users (username TEXT UNIQUE, password TEXT, role TEXT)''')
 c.execute('''CREATE TABLE IF NOT EXISTS products 
@@ -28,7 +28,7 @@ c.execute('''CREATE TABLE IF NOT EXISTS logs
 c.execute("INSERT OR IGNORE INTO users VALUES ('admin', '8888', 'admin')")
 conn.commit()
 
-# --- 2. 工具函數 (略，保持不變) ---
+# --- 2. 工具函數 (照片、庫存換算) ---
 def image_to_base64(image_file):
     if image_file:
         try:
@@ -55,41 +55,163 @@ def get_stock_and_profit(name):
     display_stock = f"{t_small_qty // ratio} {big_u} {t_small_qty % ratio} {small_u}"
     return t_small_qty, t_profit, display_stock, ratio
 
-# --- 💡 核心修正：穩定版 AI 分析函數 ---
+# --- 💡 核心：AI 智能分析 (解決 404 報錯) ---
 def run_ai_analysis(inventory_summary, sales_summary):
     if not GEMINI_API_KEY:
         return "⚠️ 請先在 Streamlit Secrets 設定 GEMINI_API_KEY"
     try:
         genai.configure(api_key=GEMINI_API_KEY)
-        # 使用 models/ 前綴以確保路徑正確
+        # 使用 models/ 前綴以確保路徑絕對正確
         model = genai.GenerativeModel('models/gemini-1.5-flash')
-        
         prompt = f"""
-        你是一位專業的進銷存分析師。請根據數據提供3條建議：
+        你是一位專業的進銷存分析師。請根據數據提供3條具體的經營建議：
         庫存現狀：{inventory_summary}
-        最近銷售：{sales_summary}
-        請針對「補貨」與「利潤」回覆繁體中文，語氣精簡。
+        最近銷售紀錄：{sales_summary}
+        請針對「補貨建議」與「毛利提升」提供回覆。請用繁體中文，語氣專業精簡。
         """
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
-        return f"AI 連線失敗。這可能是因為 API Key 被 Google 封鎖。請更換新 Key 並存入 Secrets。\n錯誤詳情：{str(e)}"
+        return f"AI 連線失敗。請確認 Secrets 中的 Key 是否有效且具備 Gemini 1.5 權限。\n錯誤訊息：{str(e)}"
 
-# --- 3. 登入系統與其餘功能 (保持 v17 穩定邏輯) ---
+# --- 3. 登入系統 ---
 if "user" not in st.session_state:
-    st.title("🔒 企業進銷存系統")
+    st.title("🔒 企業進銷存登入")
     u = st.text_input("帳號")
     p = st.text_input("密碼", type="password")
-    if st.button("確認進入"):
+    if st.button("確認登入"):
         c.execute("SELECT username, role FROM users WHERE username=? AND password=?", (u, p))
         res = c.fetchone()
         if res:
             st.session_state["user"], st.session_state["role"] = res, res
             st.rerun()
+        else: st.error("❌ 帳密錯誤")
     st.stop()
 
 current_user, current_role = st.session_state["user"], st.session_state["role"]
 
-# --- 功能模組 (報表、登記、設定 - 維持原本邏輯) ---
-# ... (這裡請接續原本的快速選單、功能分流等代碼) ...
-# 為節省長度，請確保快速選單呼叫 run_ai_analysis 時不再需要傳入 API Key
+# --- 4. ➕ 快速操作選單 (Popover) ---
+def quick_action_menu():
+    with st.popover("➕ 快速操作 (AI診斷/工具)"):
+        st.subheader("🤖 AI 營運助手")
+        if st.button("✨ 執行 AI 數據診斷"):
+            with st.spinner("AI 正在閱讀報表..."):
+                c.execute("SELECT name FROM products")
+                inv_data = [f"{n}: {get_stock_and_profit(n)}" for n in c.fetchall()]
+                logs_df = pd.read_sql_query("SELECT * FROM logs ORDER BY id DESC LIMIT 15", conn)
+                report = run_ai_analysis(str(inv_data), logs_df.to_string())
+                st.info(report)
+        
+        st.divider()
+        calc = st.text_input("🧮 簡易計算機")
+        if calc:
+            try: st.success(f"結果: {eval(calc.replace('x', '*').replace('÷', '/'))}")
+            except: pass
+            
+        if current_role == "admin":
+            st.divider()
+            st.subheader("⚙️ 管理員工具")
+            st.session_state.is_locked = st.toggle("🔒 開啟盤點鎖定", value=st.session_state.get('is_locked', False))
+            h_df = pd.read_sql_query("SELECT * FROM logs ORDER BY id DESC", conn)
+            st.download_button("📥 匯出明細 (CSV)", h_df.to_csv(index=False).encode('utf-8-sig'), "history.csv", "text/csv")
+            if st.button("建立員工帳號 (staff/1111)"):
+                c.execute("INSERT OR REPLACE INTO users VALUES ('staff','1111','staff')")
+                conn.commit(); st.success("已建立")
+
+# --- 5. 主選單功能分流 ---
+st.sidebar.title(f"👤 {current_user}")
+if st.sidebar.button("🚪 登出系統"):
+    del st.session_state["user"]; st.rerun()
+
+menu = ["📊 庫存報表", "📝 進出貨登記"]
+if current_role == "admin": menu.append("🍎 商品維護設定")
+choice = st.sidebar.selectbox("切換主要功能", menu)
+
+# --- 功能 1：報表與分析 ---
+if choice == "📊 庫存報表":
+    st.subheader("📦 即時庫存監控")
+    quick_action_menu()
+    c.execute("SELECT name, image_data, description FROM products")
+    prods = c.fetchall()
+    if prods:
+        all_p, profit_data = 0, []
+        cols = st.columns(2 if st.sidebar.checkbox("手機模式", True) else 4)
+        for idx, (n, img, desc) in enumerate(prods):
+            sq, prof, ds, _ = get_stock_and_profit(n)
+            all_p += prof
+            profit_data.append({"品項": n, "毛利": prof})
+            with cols[idx % len(cols)]:
+                if img: st.image(f"data:image/jpeg;base64,{img}", use_container_width=True)
+                st.markdown(f"**{n}**\n庫存：{ds}")
+                st.divider()
+        if current_role == "admin":
+            st.sidebar.metric("總累計毛利", f"${all_p:,.0f} TW$")
+            st.subheader("📈 獲利貢獻分析")
+            st.bar_chart(pd.DataFrame(profit_data).set_index("品項"))
+    
+    st.subheader("📜 歷史明細追溯")
+    h_df = pd.read_sql_query("SELECT name, type, qty, unit, operator, date FROM logs ORDER BY id DESC LIMIT 50", conn)
+    st.dataframe(h_df, use_container_width=True)
+
+# --- 功能 2：進出貨登記 ---
+elif choice == "📝 進出貨登記":
+    st.subheader("📝 登記進銷貨")
+    quick_action_menu()
+    if st.session_state.get('is_locked', False): st.error("🛑 系統鎖定中")
+    else:
+        c.execute("SELECT name FROM products")
+        names = [r for r in c.fetchall()]
+        scan = st.text_input("📷 掃描/搜尋品項 (iOS長按選掃描條碼)")
+        idx = names.index(scan) if scan in names else 0
+        target = st.selectbox("品項確認", options=names, index=idx)
+        if target:
+            sq, _, ds, _ = get_stock_and_profit(target)
+            st.info(f"當前庫存：{ds}")
+            c.execute("SELECT big_unit, small_unit, ratio FROM products WHERE name=?", (target,))
+            b_u, s_u, ratio = c.fetchone()
+            with st.form("trade"):
+                t_type = st.radio("類型", ["進貨", "出貨"], horizontal=True)
+                t_qty = st.number_input("數量", min_value=1, step=1)
+                t_unit = st.selectbox("單位", [b_u, s_u])
+                t_price = st.number_input("單價", min_value=0.0)
+                if st.form_submit_button("確認提交"):
+                    tx_sq = t_qty * ratio if t_unit == b_u else t_qty
+                    if t_type == "出貨" and tx_sq > sq: st.error("❌ 庫存不足")
+                    else:
+                        c.execute("INSERT INTO logs (name, type, qty, unit, price_at_time, date, operator) VALUES (?,?,?,?,?,?,?)",
+                                  (target, t_type, t_qty, t_unit, t_price, datetime.now().strftime("%Y-%m-%d %H:%M"), current_user))
+                        conn.commit(); st.success("✅ 登記成功"); st.balloons()
+
+# --- 功能 3：商品設定 (含自動算價) ---
+elif choice == "🍎 商品維護設定":
+    st.subheader("🍎 商品建檔與編輯")
+    quick_action_menu()
+    c.execute("SELECT name FROM products")
+    exists = ["+ 新增商品"] + [r for r in c.fetchall()]
+    mode = st.selectbox("編輯對象", exists)
+    iv = {"n":"","c":0.0,"p":0.0,"bu":"箱","su":"顆","r":10,"d":"","img":None}
+    if mode != "+ 新增商品":
+        c.execute("SELECT * FROM products WHERE name=?", (mode,))
+        p = c.fetchone()
+        if p: iv = {"n":p,"c":p,"p":p,"bu":p,"su":p,"r":p,"img":p,"d":p}
+
+    name = st.text_input("品名/條碼", value=iv["n"])
+    col1, col2, col3 = st.columns(3)
+    with col1: b_u = st.text_input("大單位", value=iv["bu"])
+    with col2: s_u = st.text_input("小單位", value=iv["su"])
+    with col3: ratio = st.number_input("換算率", min_value=1, value=iv["r"])
+    
+    cost = st.number_input("整箱成本", value=iv["c"])
+    margin = st.slider("毛利率 (%)", 0, 100, 30)
+    suggested = (cost/ratio) * (1 + margin/100) if ratio > 0 else 0
+    price = st.number_input("單顆售價", value=float(iv["p"] if mode != "+ 新增商品" else suggested))
+
+    with st.form("prod"):
+        desc = st.text_area("詳細敘述", value=iv["d"])
+        cam = st.camera_input("拍照 (保留原圖請留空)")
+        if st.form_submit_button("儲存資料"):
+            img_b = image_to_base64(cam) if cam else iv["img"]
+            c.execute("INSERT OR REPLACE INTO products (name, cost, price, big_unit, small_unit, ratio, alert_level, image_data, description, created_by) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                      (name, cost, price, b_u, s_u, ratio, 5, img_b, desc, current_user))
+            conn.commit(); st.success("🎉 已成功儲存至雲端"); st.rerun()
+
