@@ -10,7 +10,7 @@ import google.generativeai as genai
 # --- 1. 介面與資料庫初始化 ---
 st.set_page_config(page_title="AI 智能進銷存系統", layout="wide", page_icon="🚀")
 
-# 這裡已經幫您填入 API Key
+# 這裡已更換為您提供的最新 API Key
 GEMINI_API_KEY = "AIzaSyABZQs_7pzPFRmx9ky8eaeQfqZTnf1ELOY"
 
 conn = sqlite3.connect('business_v16.db', check_same_thread=False)
@@ -25,7 +25,7 @@ c.execute('''CREATE TABLE IF NOT EXISTS logs
 c.execute("INSERT OR IGNORE INTO users VALUES ('admin', '8888', 'admin')")
 conn.commit()
 
-# --- 2. 工具函數 ---
+# --- 2. 工具函數 (照片、庫存、毛利) ---
 def image_to_base64(image_file):
     if image_file:
         try:
@@ -52,30 +52,28 @@ def get_stock_and_profit(name):
     display_stock = f"{t_small_qty // ratio} {big_u} {t_small_qty % ratio} {small_u}"
     return t_small_qty, t_profit, display_stock, ratio
 
-# --- 💡 核心修正：穩定版 AI 分析函數 ---
+# --- 💡 核心功能：AI 分析函數 ---
 def run_ai_analysis(inventory_summary, sales_summary):
     try:
         genai.configure(api_key=GEMINI_API_KEY)
-        # 修正：直接指定穩定模型名稱
         model = genai.GenerativeModel('gemini-1.5-flash')
-        
         prompt = f"""
-        你是一位專業的進銷存分析師。請根據數據提供3條建議：
+        你是一位專業的進銷存分析師。請根據數據提供3條具體的經營建議：
         庫存現狀：{inventory_summary}
-        最近銷售：{sales_summary}
-        請針對「補貨」與「利潤」回覆繁體中文，語氣精簡。
+        最近銷售紀錄：{sales_summary}
+        請針對「庫存風險」與「毛利優化」提供建議。請用繁體中文回答，語氣專業精簡。
         """
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
-        return f"AI 診斷連線異常，請確認 API Key 是否有效。詳細錯誤：{str(e)}"
+        return f"AI 診斷連線異常，請檢查金鑰狀態。錯誤：{str(e)}"
 
 # --- 3. 登入系統 ---
 if "user" not in st.session_state:
     st.title("🔒 企業進銷存系統")
     u = st.text_input("帳號")
     p = st.text_input("密碼", type="password")
-    if st.button("登入系統"):
+    if st.button("確認進入"):
         c.execute("SELECT username, role FROM users WHERE username=? AND password=?", (u, p))
         res = c.fetchone()
         if res:
@@ -89,11 +87,11 @@ current_user, current_role = st.session_state["user"], st.session_state["role"]
 # --- 4. ➕ 快速操作選單 ---
 def quick_action_menu():
     with st.popover("➕ 快速操作 (AI診斷/工具)"):
-        st.subheader("🤖 AI 營運助手")
-        if st.button("✨ 執行 AI 數據分析"):
+        st.subheader("🤖 AI 智能助手")
+        if st.button("✨ 執行數據分析報告"):
             with st.spinner("AI 正在閱讀您的報表..."):
                 c.execute("SELECT name FROM products")
-                inv_data = [f"{n}: {get_stock_and_profit(n)}" for n in c.fetchall()]
+                inv_data = [f"{n}: {get_stock_and_profit(n)[2]}" for n in c.fetchall()]
                 logs_df = pd.read_sql_query("SELECT * FROM logs ORDER BY id DESC LIMIT 15", conn)
                 report = run_ai_analysis(str(inv_data), logs_df.to_string())
                 st.info(report)
@@ -106,21 +104,21 @@ def quick_action_menu():
             
         if current_role == "admin":
             st.divider()
-            st.subheader("⚙️ 管理員工具")
-            st.session_state.is_locked = st.toggle("🔒 盤點鎖定模式", value=st.session_state.get('is_locked', False))
+            st.subheader("⚙️ 管理工具")
+            st.session_state.is_locked = st.toggle("🔒 盤點鎖定開關", value=st.session_state.get('is_locked', False))
             h_df = pd.read_sql_query("SELECT * FROM logs ORDER BY id DESC", conn)
-            st.download_button("📥 匯出明細 (CSV)", h_df.to_csv(index=False).encode('utf-8-sig'), "history.csv", "text/csv")
+            st.download_button("📥 下載明細 (CSV)", h_df.to_csv(index=False).encode('utf-8-sig'), "history.csv", "text/csv")
 
-# --- 5. 主選單 ---
+# --- 5. 主功能選單 ---
 st.sidebar.title(f"👤 {current_user}")
-if st.sidebar.button("🚪 登出"):
+if st.sidebar.button("🚪 登出系統"):
     del st.session_state["user"]; st.rerun()
 
 menu = ["📊 庫存報表", "📝 進出貨登記"]
 if current_role == "admin": menu.append("🍎 商品維護設定")
 choice = st.sidebar.selectbox("切換功能", menu)
 
-# --- 報表功能 ---
+# --- 報表與圖表 ---
 if choice == "📊 庫存報表":
     st.subheader("📦 即時庫存監控")
     quick_action_menu()
@@ -138,7 +136,8 @@ if choice == "📊 庫存報表":
                 st.markdown(f"**{n}**\n庫存：{ds}")
                 st.divider()
         if current_role == "admin":
-            st.sidebar.metric("總累計毛利", f"${all_p:,.0f}")
+            st.sidebar.metric("總累計毛利", f"${all_p:,.0f} TW$")
+            st.subheader("📈 銷售獲利圖表")
             st.bar_chart(pd.DataFrame(profit_data).set_index("品項"))
     
     st.subheader("📜 最近歷史明細")
@@ -153,26 +152,26 @@ elif choice == "📝 進出貨登記":
     else:
         c.execute("SELECT name FROM products")
         names = [r for r in c.fetchall()]
-        scan = st.text_input("📷 掃描/搜尋品項 (iOS長按選掃描條碼)")
+        scan = st.text_input("📷 掃描/搜尋品項")
         idx = names.index(scan) if scan in names else 0
         target = st.selectbox("品項確認", options=names, index=idx)
         if target:
             sq, _, ds, _ = get_stock_and_profit(target)
             st.info(f"當前庫存：{ds}")
             c.execute("SELECT big_unit, small_unit, ratio FROM products WHERE name=?", (target,))
-            b_u, s_u, ratio = c.fetchone()
+            units = c.fetchone()
             with st.form("trade"):
                 t_type = st.radio("類型", ["進貨", "出貨"], horizontal=True)
                 t_qty = st.number_input("數量", min_value=1)
-                t_unit = st.selectbox("單位", [b_u, s_u])
+                t_unit = st.selectbox("單位", units)
                 t_price = st.number_input("單價", min_value=0.0)
                 if st.form_submit_button("確認提交"):
-                    tx_sq = t_qty * ratio if t_unit == b_u else t_qty
+                    tx_sq = t_qty * ratio if t_unit == units[0] else t_qty
                     if t_type == "出貨" and tx_sq > sq: st.error("❌ 庫存不足")
                     else:
                         c.execute("INSERT INTO logs (name, type, qty, unit, price_at_time, date, operator) VALUES (?,?,?,?,?,?,?)",
                                   (target, t_type, t_qty, t_unit, t_price, datetime.now().strftime("%Y-%m-%d %H:%M"), current_user))
-                        conn.commit(); st.success("✅ 成功"); st.balloons()
+                        conn.commit(); st.success("✅ 登記成功"); st.balloons()
 
 # --- 設定功能 ---
 elif choice == "🍎 商品維護設定":
@@ -187,7 +186,7 @@ elif choice == "🍎 商品維護設定":
         p = c.fetchone()
         if p: iv = {"n":p,"c":p,"p":p,"bu":p,"su":p,"r":p,"img":p,"d":p}
 
-    name = st.text_input("品名", value=iv["n"])
+    name = st.text_input("品名 (條碼)", value=iv["n"])
     col1, col2, col3 = st.columns(3)
     with col1: b_u = st.text_input("大單位", value=iv["bu"])
     with col2: s_u = st.text_input("小單位", value=iv["su"])
@@ -206,3 +205,4 @@ elif choice == "🍎 商品維護設定":
             c.execute("INSERT OR REPLACE INTO products (name, cost, price, big_unit, small_unit, ratio, alert_level, image_data, description, created_by) VALUES (?,?,?,?,?,?,?,?,?,?)",
                       (name, cost, price, b_u, s_u, ratio, 5, img_b, desc, current_user))
             conn.commit(); st.success("🎉 已儲存"); st.rerun()
+
