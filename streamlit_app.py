@@ -55,7 +55,7 @@ def get_stock_and_profit(name):
     display_stock = f"{t_small_qty // ratio} {big_u} {t_small_qty % ratio} {small_u}"
     return t_small_qty, t_profit, display_stock, ratio
 
-# --- 💡 終極修正：解決 404 報錯並強制使用最新穩定路徑 ---
+# --- 💡 終極修正：升級為 Gemini 2.0 模型並解決版本衝突 ---
 def run_ai_analysis(inventory_summary, sales_summary):
     if not GEMINI_API_KEY:
         return "⚠️ 請先在 Secrets 設定 GEMINI_API_KEY。"
@@ -63,32 +63,30 @@ def run_ai_analysis(inventory_summary, sales_summary):
         # 1. 初始化設定
         genai.configure(api_key=GEMINI_API_KEY)
         
-        # 2. 強制指定穩定版模型 (不要只寫 gemini-pro)
-        # 如果 gemini-1.5-flash 失敗，會自動切換路徑
-        try:
-            model = genai.GenerativeModel('gemini-1.5-flash')
-        except:
-            model = genai.GenerativeModel('models/gemini-1.5-flash')
+        # 2. 核心修正：改用目前最先進且支援度最高的 gemini-2.0-flash
+        # 這種寫法能繞過舊版 v1beta 的 404 限制
+        model = genai.GenerativeModel('gemini-2.0-flash')
         
         prompt = f"""
-        你是一位專業的進銷存分析師。請根據數據提供3條具體建議：
+        你是一位專業的進銷存營運分析師。請根據以下數據提供3條具體的經營建議：
         目前的庫存現狀：{inventory_summary}
         最近銷售紀錄摘要：{sales_summary}
         請針對「補貨建議」與「利潤提升」提供繁體中文回覆，語氣專業精簡。
         """
         
-        # 3. 呼叫生成 (不指定 version，讓 SDK 自動選最穩定的 v1)
+        # 3. 執行生成
         response = model.generate_content(prompt)
         return response.text
         
     except Exception as e:
-        # 如果連 1.5 都報錯，最後的保險：退回最基礎的名稱
+        # 如果 2.0 也報錯，則嘗試最後一個穩定路徑
         try:
-            model = genai.GenerativeModel('models/gemini-pro')
+            model = genai.GenerativeModel('models/gemini-1.5-flash-latest')
             response = model.generate_content(prompt)
             return response.text
         except Exception as e2:
-            return f"AI 診斷連線失敗。這通常是 Google 帳號權限問題，建議到 Google AI Studio 建立一個新的 API Key 試試。\n錯誤詳情：{str(e2)}"
+            return f"AI 診斷連線失敗。請確認：\n1. 您的金鑰是否為最新申請\n2. GitHub 的 requirements.txt 版本是否正確\n詳細錯誤：{str(e2)}"
+
 
 
 
