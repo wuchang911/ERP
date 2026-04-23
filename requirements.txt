@@ -1,2 +1,5 @@
 streamlit
 pandas
+Pillow
+streamlit-barcode-reader
+
