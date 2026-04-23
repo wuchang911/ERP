@@ -5,7 +5,7 @@ import base64
 from PIL import Image
 import io
 from datetime import datetime
-from streamlit_barcode_reader import streamlit_barcode_reader
+from streamlit_camera_qr import barcode_scanner # 換成這個套件
 
 # --- 1. 資料庫初始化 ---
 conn = sqlite3.connect('business_pro_v6.db', check_same_thread=False)
@@ -72,21 +72,22 @@ menu = ["📊 庫存報表", "📝 進出貨登記", "🍎 商品設定"]
 if current_role != "admin": menu.remove("🍎 商品設定")
 choice = st.sidebar.selectbox("切換功能", menu)
 
-# --- 功能：進出貨登記 (支援掃描) ---
+# --- 功能：進出貨登記 (支援 QR/條碼掃描) ---
 if choice == "📝 進出貨登記":
     st.subheader("📝 登記進銷貨")
     if system_lock: st.error("🛑 系統鎖定中")
     else:
-        # 掃描區塊
-        with st.expander("📷 掃描條碼選取商品"):
-            scanned_code = streamlit_barcode_reader()
-            if scanned_code: st.success(f"掃描成功：{scanned_code}")
+        st.write("📷 掃描商品條碼")
+        # 啟動掃描器
+        scanned_code = barcode_scanner()
+        if scanned_code: st.success(f"已掃描到：{scanned_code}")
         
         c.execute("SELECT name FROM products")
         p_names = [p[0] for p in c.fetchall()]
         
         idx = 0
-        if scanned_code in p_names: idx = p_names.index(scanned_code)
+        if scanned_code in p_names: 
+            idx = p_names.index(scanned_code)
         
         target_p = st.selectbox("品項選擇", options=p_names, index=idx)
         
@@ -111,17 +112,16 @@ if choice == "📝 進出貨登記":
 # --- 功能：商品設定 (支援掃描建檔) ---
 elif choice == "🍎 商品設定":
     st.subheader("🍎 商品維護")
-    with st.expander("📷 掃描商品條碼建檔"):
-        new_code = streamlit_barcode_reader()
-        if new_code: st.info(f"掃描到的編號：{new_code}")
+    st.write("📷 掃描條碼建檔")
+    new_code = barcode_scanner()
+    if new_code: st.info(f"掃描結果：{new_code}")
 
     with st.form("new_p_form"):
-        # 如果有掃描到，就直接填入名稱欄位
-        n = st.text_input("商品名稱 (可直接填寫或由上方掃描)", value=new_code if new_code else "")
+        n = st.text_input("商品名稱 (條碼編號)", value=new_code if new_code else "")
         b, s, r = st.text_input("大單位", value="箱"), st.text_input("小單位", value="顆"), st.number_input("換算率", min_value=1)
         cost, price = st.number_input("整箱成本"), st.number_input("單顆售價")
         desc = st.text_area("描述")
-        cam = st.camera_input("商品照片")
+        cam = st.camera_input("拍照")
         if st.form_submit_button("儲存商品"):
             img_b = image_to_base64(cam)
             now = datetime.now().strftime("%Y-%m-%d")
