@@ -55,19 +55,20 @@ def get_stock_and_profit(name):
     display_stock = f"{t_small_qty // ratio} {big_u} {t_small_qty % ratio} {small_u}"
     return t_small_qty, t_profit, display_stock, ratio
 
-# --- 💡 核心修正：解決 404 報錯的 AI 函數 ---
+# --- 💡 終極修正：解決 404 報錯並強制使用最新穩定路徑 ---
 def run_ai_analysis(inventory_summary, sales_summary):
     if not GEMINI_API_KEY:
         return "⚠️ 請先在 Secrets 設定 GEMINI_API_KEY。"
     try:
-        # 1. 確保初始化
+        # 1. 初始化設定
         genai.configure(api_key=GEMINI_API_KEY)
         
-        # 2. 強制指定完整的模型路徑 (這是解決 404 的關鍵)
-        # 如果 gemini-1.5-flash 不行，程式會嘗試 gemini-pro
-        model_name = 'models/gemini-1.5-flash' 
-        
-        model = genai.GenerativeModel(model_name=model_name)
+        # 2. 強制指定穩定版模型 (不要只寫 gemini-pro)
+        # 如果 gemini-1.5-flash 失敗，會自動切換路徑
+        try:
+            model = genai.GenerativeModel('gemini-1.5-flash')
+        except:
+            model = genai.GenerativeModel('models/gemini-1.5-flash')
         
         prompt = f"""
         你是一位專業的進銷存分析師。請根據數據提供3條具體建議：
@@ -76,18 +77,19 @@ def run_ai_analysis(inventory_summary, sales_summary):
         請針對「補貨建議」與「利潤提升」提供繁體中文回覆，語氣專業精簡。
         """
         
-        # 3. 執行內容生成
+        # 3. 呼叫生成 (不指定 version，讓 SDK 自動選最穩定的 v1)
         response = model.generate_content(prompt)
         return response.text
         
     except Exception as e:
-        # 如果 1.5 版報錯 404，嘗試退回 1.0 穩定版 (gemini-pro)
+        # 如果連 1.5 都報錯，最後的保險：退回最基礎的名稱
         try:
             model = genai.GenerativeModel('models/gemini-pro')
             response = model.generate_content(prompt)
             return response.text
         except Exception as e2:
-            return f"AI 診斷連線失敗。請確認：\n1. API Key 是否有效\n2. 是否有開啟 Google AI Studio 權限\n錯誤詳情：{str(e2)}"
+            return f"AI 診斷連線失敗。這通常是 Google 帳號權限問題，建議到 Google AI Studio 建立一個新的 API Key 試試。\n錯誤詳情：{str(e2)}"
+
 
 
 # --- 3. 登入系統 ---
