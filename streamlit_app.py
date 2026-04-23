@@ -6,39 +6,49 @@ from PIL import Image
 import io
 from datetime import datetime
 
-# --- 0. 權限與登入驗證 ---
-def check_password():
-    if "user_role" not in st.session_state:
-        st.title("🔒 企業管理系統登入")
-        pwd = st.text_input("請輸入密碼", type="password")
-        if st.button("登入"):
-            if pwd == "8888":  # 管理員密碼
-                st.session_state["user_role"] = "admin"
-                st.rerun()
-            elif pwd == "1111":  # 員工密碼
-                st.session_state["user_role"] = "staff"
+# --- 1. 資料庫與權限初始化 ---
+conn = sqlite3.connect('business_pro_v6.db', check_same_thread=False)
+c = conn.cursor()
+
+# 建立表格：使用者、商品(含建檔人)、日誌(含操作人)
+c.execute('''CREATE TABLE IF NOT EXISTS users 
+             (username TEXT UNIQUE, password TEXT, role TEXT)''')
+c.execute('''CREATE TABLE IF NOT EXISTS products 
+             (name TEXT UNIQUE, cost REAL, price REAL, big_unit TEXT, small_unit TEXT, 
+              ratio INTEGER, alert_level INTEGER, image_data TEXT, description TEXT, created_by TEXT, created_at TEXT)''')
+c.execute('''CREATE TABLE IF NOT EXISTS logs 
+             (id INTEGER PRIMARY KEY, name TEXT, type TEXT, qty INTEGER, unit TEXT, 
+              price_at_time REAL, date TEXT, operator TEXT)''')
+
+# 預設管理員帳號：admin / 8888 (如果不存在則建立)
+c.execute("INSERT OR IGNORE INTO users VALUES ('admin', '8888', 'admin')")
+conn.commit()
+
+# --- 2. 登入系統 ---
+def login():
+    if "user" not in st.session_state:
+        st.title("🔒 企業進銷存系統登入")
+        u = st.text_input("帳號")
+        p = st.text_input("密碼", type="password")
+        if st.button("確認登入"):
+            c.execute("SELECT username, role FROM users WHERE username=? AND password=?", (u, p))
+            user_data = c.fetchone()
+            if user_data:
+                st.session_state["user"] = user_data[0]
+                st.session_state["role"] = user_data[1]
                 st.rerun()
             else:
-                st.error("❌ 密碼錯誤")
+                st.error("❌ 帳號或密碼錯誤")
         return False
     return True
 
-if not check_password():
+if not login():
     st.stop()
 
-role = st.session_state["user_role"]
+current_user = st.session_state["user"]
+current_role = st.session_state["role"]
 
-# --- 1. 資料庫初始化 ---
-conn = sqlite3.connect('business_pro_v5.db', check_same_thread=False)
-c = conn.cursor()
-c.execute('''CREATE TABLE IF NOT EXISTS products 
-             (name TEXT UNIQUE, cost REAL, price REAL, big_unit TEXT, small_unit TEXT, 
-              ratio INTEGER, alert_level INTEGER, image_data TEXT, description TEXT)''')
-c.execute('''CREATE TABLE IF NOT EXISTS logs 
-             (id INTEGER PRIMARY KEY, name TEXT, type TEXT, qty INTEGER, unit TEXT, price_at_time REAL, date TEXT)''')
-conn.commit()
-
-# --- 2. 工具函數 ---
+# --- 3. 工具函數 ---
 def image_to_base64(image_file):
     if image_file:
         try:
@@ -65,85 +75,96 @@ def get_stock_and_profit(name):
     display_stock = f"{total_small_qty // ratio} {big_u} {total_small_qty % ratio} {small_u}"
     return total_small_qty, total_profit, display_stock, ratio
 
-# --- 3. 側邊欄 ---
-st.sidebar.title(f"🏢 企業管理 ({'管理員' if role=='admin' else '員工'})")
+# --- 4. 側邊欄與管理員功能 ---
+st.sidebar.title(f"👤 {current_user} ({'管理員' if current_role=='admin' else '員工'})")
 
-# --- 只有管理員看得到鎖定開關 ---
-system_lock = False
-if role == "admin":
-    with st.sidebar.expander("🔒 系統權限控制"):
-        system_lock = st.toggle("開啟盤點鎖定", value=False)
-        if system_lock: st.warning("⚠️ 已封鎖登記功能")
+if current_role == "admin":
+    with st.sidebar.expander("👤 帳號管理面板"):
+        new_u = st.text_input("新增帳號")
+        new_p = st.text_input("設定密碼", type="password")
+        new_r = st.selectbox("權限等級", ["staff", "admin"])
+        if st.button("建立/更新帳號"):
+            c.execute("INSERT OR REPLACE INTO users VALUES (?,?,?)", (new_u, new_p, new_r))
+            conn.commit(); st.success(f"帳號 {new_u} 已更新")
         
-    # --- 只有管理員看得到資料清理 ---
-    with st.sidebar.expander("🛠️ 資料管理"):
-        if st.checkbox("確認清空所有交易紀錄"):
-            if st.button("🔥 立即清空"):
-                c.execute("DELETE FROM logs"); conn.commit(); st.rerun()
+        st.write("---")
+        del_u = st.selectbox("刪除帳號", [r[0] for r in c.execute("SELECT username FROM users WHERE username != 'admin'").fetchall()])
+        if st.button("確認刪除"):
+            c.execute("DELETE FROM users WHERE username=?", (del_u,))
+            conn.commit(); st.rerun()
+
+    system_lock = st.sidebar.toggle("🔒 盤點鎖定", value=False)
 else:
-    # 員工登入時，若管理員已開啟鎖定，這裡要自動獲取狀態 (此簡易版使用 Session 模擬)
-    if "admin_lock" not in st.session_state: st.session_state["admin_lock"] = False
-    system_lock = st.session_state.get("admin_lock", False)
+    system_lock = False # 員工無法切換，預設依賴伺服器狀態（此處簡化處理）
 
-st.sidebar.divider()
 if st.sidebar.button("登出系統"):
-    del st.session_state["user_role"]; st.rerun()
+    del st.session_state["user"]; del st.session_state["role"]; st.rerun()
 
-# 選單權限：員工不能進入「商品設定」
-menu_options = ["📊 即時庫存與報表", "📝 進出貨登記"]
-if role == "admin":
-    menu_options.append("🍎 商品設定")
-
-choice = st.sidebar.selectbox("切換功能", menu_options)
+# --- 5. 主選單 ---
+menu = ["📊 庫存與追溯", "📝 進出貨登記", "🍎 商品維護"]
+if current_role != "admin": menu.remove("🍎 商品維護")
+choice = st.selectbox("功能導覽", menu)
 
 # --- 功能 1：庫存與報表 ---
-if choice == "📊 即時庫存與報表":
-    st.subheader("📦 精確庫存監控")
-    c.execute("SELECT name, image_data, alert_level, description FROM products")
+if choice == "📊 庫存與追溯":
+    st.subheader("📦 即時庫存監控")
+    c.execute("SELECT name, image_data, description, created_by, created_at FROM products")
     prods = c.fetchall()
-    all_profit = 0
+    
     cols = st.columns(2 if st.sidebar.checkbox("手機模式", True) else 4)
-    for idx, (name, img, alert, desc) in enumerate(prods):
+    for idx, (name, img, desc, creator, ctime) in enumerate(prods):
         small_qty, profit, display_stock, ratio = get_stock_and_profit(name)
-        all_profit += profit
         with cols[idx % len(cols)]:
             if img: st.image(f"data:image/jpeg;base64,{img}", use_container_width=True)
-            color = "#FF4B4B" if small_qty <= alert else "#00A000"
             st.markdown(f"**{name}**")
-            st.markdown(f"庫存：<span style='color:{color};font-weight:bold;'>{display_stock}</span>", unsafe_allow_html=True)
+            st.markdown(f"庫存：**{display_stock}**")
+            st.caption(f"建檔人: {creator} ({ctime})")
             if desc:
-                with st.expander("📝 敘述"): st.write(desc)
-    
-    # 只有管理員看得到毛利總額
-    if role == "admin":
-        st.sidebar.metric("總累計毛利", f"${all_profit:,.0f} TW$")
+                with st.expander("📝 描述"): st.write(desc)
+            st.divider()
+
+    st.subheader("📜 歷史交易追溯 (含操作人)")
+    history_df = pd.read_sql_query("SELECT name as 品項, type as 類型, qty as 數量, unit as 單位, price_at_time as 單價, date as 日期, operator as 操作員 FROM logs ORDER BY id DESC", conn)
+    st.dataframe(history_df, use_container_width=True)
 
 # --- 功能 2：進出貨登記 ---
 elif choice == "📝 進出貨登記":
-    st.subheader("📝 進銷貨登記")
-    if system_lock:
-        st.error("🛑 系統盤點鎖定中，目前無法登記。請聯繫管理員。")
+    if system_lock: st.error("🛑 盤點鎖定中")
     else:
         c.execute("SELECT name, big_unit, small_unit FROM products")
         items = c.fetchall()
-        if not items: st.warning("請先設定商品")
-        else:
-            t_data = st.selectbox("品項", options=items)
-            with st.form("trade"):
-                t_type = st.radio("類型", ["進貨", "出貨"], horizontal=True)
-                cur_s, _, cur_d, _ = get_stock_and_profit(t_data)
-                st.info(f"💡 目前庫存：{cur_d}")
-                q, u = st.columns(2)
-                with q: t_qty = st.number_input("數量", min_value=1)
-                with u: t_unit = st.selectbox("單位", [t_data, t_data])
-                t_price = st.number_input("單價", min_value=0.0, value=100.0)
-                if st.form_submit_button("提交登記"):
-                    c.execute("INSERT INTO logs (name, type, qty, unit, price_at_time, date) VALUES (?,?,?,?,?,?)", 
-                              (t_data, t_type, t_qty, t_unit, t_price, datetime.now().strftime("%Y/%m/%d")))
-                    conn.commit(); st.success("✅ 登記成功"); st.balloons()
+        t_data = st.selectbox("選擇商品", items, format_func=lambda x: x[0])
+        with st.form("trade"):
+            t_type = st.radio("類型", ["進貨", "出貨"], horizontal=True)
+            t_qty = st.number_input("數量", min_value=1)
+            t_unit = st.selectbox("單位", [t_data[1], t_data[2]])
+            t_price = st.number_input("單價", min_value=0.0)
+            if st.form_submit_button("確認提交"):
+                now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                c.execute("INSERT INTO logs (name, type, qty, unit, price_at_time, date, operator) VALUES (?,?,?,?,?,?,?)", 
+                          (t_data[0], t_type, t_qty, t_unit, t_price, now_str, current_user))
+                conn.commit(); st.success(f"登記成功！操作人：{current_user}"); st.balloons()
 
-# --- 功能 3：商品設定 (僅限管理員) ---
-elif choice == "🍎 商品設定" and role == "admin":
-    st.subheader("🍎 商品資料維護")
-    # ... (此處保留原本的商品設定程式碼) ...
-    st.write("管理員您好，您可以在此新增或修改商品參數。")
+# --- 功能 3：商品維護 ---
+elif choice == "🍎 商品維護":
+    st.subheader("🍎 商品建檔與修改")
+    c.execute("SELECT name FROM products")
+    p_names = ["+ 新增"] + [r[0] for r in c.fetchall()]
+    mode = st.selectbox("選擇商品", p_names)
+    
+    with st.form("prod_form"):
+        name = st.text_input("商品名稱", value="" if mode=="+ 新增" else mode)
+        col1, col2 = st.columns(2)
+        with col1: b_u = st.text_input("大單位", value="箱")
+        with col2: s_u = st.text_input("小單位", value="顆")
+        ratio = st.number_input("換算率", min_value=1, value=10)
+        cost = st.number_input("進貨成本", min_value=0.0)
+        price = st.number_input("銷售單價", min_value=0.0)
+        desc = st.text_area("詳細敘述")
+        img = st.camera_input("照片")
+        if st.form_submit_button("儲存資料"):
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+            img_b64 = image_to_base64(img)
+            c.execute("INSERT OR REPLACE INTO products VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                      (name, cost, price, b_u, s_u, ratio, 5, img_b64, desc, current_user, now_str))
+            conn.commit(); st.success("儲存成功！"); st.rerun()
