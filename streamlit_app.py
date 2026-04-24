@@ -223,7 +223,6 @@ elif choice == "👥 系統帳號管理":
     st.subheader("👥 系統權限管理")
     # 此部分保留您之前的帳號增減邏輯... (略)
 
-            conn.commit(); st.rerun()
 
 
 
