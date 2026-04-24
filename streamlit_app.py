@@ -89,21 +89,28 @@ def run_ai_analysis(inventory_summary, sales_summary):
             return "⚠️ AI 額度已達上限或請求太頻繁。請等待 1 分鐘後再試，或更換新 API Key。"
         return f"AI 診斷連線異常：{str(e)}"
 
-# --- 3. 登入系統 ---
+# --- 3. 登入系統 (修正版) ---
 if "user" not in st.session_state:
     st.title("🔒 企業進銷存系統")
     u = st.text_input("帳號")
     p = st.text_input("密碼", type="password")
     if st.button("確認進入"):
+        # 查詢使用者名稱與權限
         c.execute("SELECT username, role FROM users WHERE username=? AND password=?", (u, p))
         res = c.fetchone()
         if res:
-            st.session_state["user"], st.session_state["role"] = res, res
+            # res[0] 是 username, res[1] 是 role
+            st.session_state["user"] = res[0]
+            st.session_state["role"] = res[1]
             st.rerun()
-        else: st.error("❌ 帳密錯誤")
+        else: 
+            st.error("❌ 帳密錯誤")
     st.stop()
 
-current_user, current_role = st.session_state["user"], st.session_state["role"]
+# 這裡取得的會是純字串，例如 "admin"
+current_user = st.session_state["user"]
+current_role = st.session_state["role"]
+
 
 # --- 4. ➕ 快速操作選單 (Popover) ---
 def quick_action_menu():
