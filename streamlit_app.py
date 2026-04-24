@@ -72,10 +72,18 @@ def run_ai_analysis(inventory_summary, sales_summary):
     if not GEMINI_API_KEY: return "⚠️ 未設定 API Key。"
     try:
         genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        # 建議改用 -latest 結尾的別名，這會自動指向最新穩定版
+        # 或者直接升級到最新的 gemini-2.0-flash
+        model = genai.GenerativeModel('gemini-1.5-flash-latest') 
+        
         prompt = f"分析庫存：{inventory_summary}\n紀錄：{sales_summary}\n請給出3點專業補貨與營運建議。"
-        return model.generate_content(prompt).text
-    except Exception as e: return f"AI 錯誤：{str(e)}"
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        # 如果還是 404，可以用這行來列出你目前 Key 可以用的所有模型名稱
+        return f"AI 錯誤：{str(e)}。建議檢查模型名稱是否正確。"
+
 
 # --- 3. 登入系統 ---
 if "user" not in st.session_state:
