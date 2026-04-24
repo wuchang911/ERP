@@ -227,3 +227,45 @@ elif choice == "商品管理":
         if st.button("🗑️ 刪除商品", use_container_width=True):
             c.execute("DELETE FROM products WHERE name=?", (mode,))
             conn.commit(); st.rerun()
+
+elif choice == "帳號管理":
+    st.subheader("👥 系統帳號管理")
+    
+    # 1. 新增帳號表單
+    with st.expander("➕ 新增工作人員帳號", expanded=False):
+        with st.form("add_user_form", clear_on_submit=True):
+            new_u = st.text_input("新帳號名稱")
+            new_p = st.text_input("初始密碼", type="password")
+            new_r = st.selectbox("權限角色", ["staff", "admin"])
+            if st.form_submit_button("確認新增"):
+                if new_u and new_p:
+                    try:
+                        c.execute("INSERT INTO users VALUES (?,?,?)", (new_u, new_p, new_r))
+                        conn.commit()
+                        st.success(f"帳號 {new_u} 已建立")
+                        st.rerun()
+                    except:
+                        st.error("帳號名稱可能已存在")
+                else:
+                    st.warning("請填寫完整資訊")
+
+    # 2. 帳號列表與刪除
+    st.markdown("---")
+    st.write("現有帳號列表")
+    users_df = pd.read_sql_query("SELECT username, role FROM users", conn)
+    
+    for index, row in users_df.iterrows():
+        col1, col2, col3 = st.columns([2, 2, 1])
+        col1.write(f"👤 {row['username']}")
+        col2.write(f"🔑 權限: {row['role']}")
+        
+        # 防止刪除自己或最後一個管理員
+        if row['username'] != current_user:
+            if col3.button("刪除", key=f"del_{row['username']}"):
+                c.execute("DELETE FROM users WHERE username=?", (row['username'],))
+                conn.commit()
+                st.success(f"已刪除 {row['username']}")
+                st.rerun()
+        else:
+            col3.write("(目前登入中)")
+
