@@ -72,16 +72,21 @@ def run_ai_analysis(inventory_summary, sales_summary):
     if not GEMINI_API_KEY: return "⚠️ 未設定 API Key。"
     try:
         genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel(model_name='models/gemini-1.5-flash')
-        prompt = f"分析庫存：{inventory_summary}\n紀錄：{sales_summary}\n請給出3點專業補貨與營運建議。"
+        
+        # 修正這裡：改用你在 Playground 看到的最新模型名稱
+        model = genai.GenerativeModel('gemini-3-flash-preview') 
+        
+        prompt = f"你是一位專業分析師。庫存：{inventory_summary}\n銷售紀錄：{sales_summary}\n請提供3條關於補貨與毛利的精簡建議。"
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
+        # 如果 gemini-3 報錯，嘗試改用 gemini-2.0-flash
         try:
-            model = genai.GenerativeModel('gemini-pro')
+            model = genai.GenerativeModel('gemini-2.0-flash')
             return model.generate_content(prompt).text
         except:
-            return f"AI 錯誤：{str(e)}。請確認 API Key 是否已在 Google AI Studio 啟用 Gemini 1.5 系列權限。"
+            return f"AI 錯誤：{str(e)}。請確認 API Key 與模型名稱。"
+
 
 
 
