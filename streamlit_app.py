@@ -12,10 +12,9 @@ st.set_page_config(page_title="AI 智慧 ERP 雲端版", layout="wide", initial_
 # 建立 Google Sheets 連線
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-
 def get_data(worksheet):
-    # 移除 ttl 試試看，這會使用預設快取設定
-    return conn.read(worksheet=worksheet) 
+    # ttl=0 確保不讀取舊快取，保證登入與庫存的即時性
+    return conn.read(worksheet=worksheet, ttl=0) 
 
 def update_data(df, worksheet):
     conn.update(worksheet=worksheet, data=df)
@@ -54,14 +53,24 @@ if "user" not in st.session_state:
     st.title("🔐 雲端 ERP 登入")
     u = st.text_input("帳號")
     p = st.text_input("密碼", type="password")
+    
     if st.button("登入", use_container_width=True, type="primary"):
         u_df = get_data("users")
-        user_row = u_df[(u_df['username'] == u) & (u_df['password'] == str(p))]
+        
+        # 【修正點】強制轉換格式，避免 Excel 的數字格式導致比對失敗
+        u_df['username'] = u_df['username'].astype(str).str.strip()
+        u_df['password'] = u_df['password'].astype(str).str.strip()
+        
+        # 比對輸入的帳密
+        user_row = u_df[(u_df['username'] == str(u)) & (u_df['password'] == str(p))]
+        
         if not user_row.empty:
             st.session_state["user"] = str(user_row.iloc[0]['username'])
             st.session_state["role"] = str(user_row.iloc[0]['role'])
+            st.success("登入成功！導向中...")
             st.rerun()
-        else: st.error("❌ 帳密錯誤")
+        else: 
+            st.error("❌ 帳號或密碼錯誤，或工作表名稱/欄位不正確")
     st.stop()
 
 current_user, current_role = st.session_state["user"], st.session_state["role"]
@@ -70,23 +79,30 @@ current_user, current_role = st.session_state["user"], st.session_state["role"]
 menu = ["庫存報表", "交易登記", "歷史紀錄"]
 if current_role == "admin": menu += ["商品管理", "帳號管理"]
 choice = st.sidebar.selectbox("切換功能", menu)
-if st.sidebar.button("登出系統"): st.session_state.clear(); st.rerun()
+if st.sidebar.button("登出系統"): 
+    st.session_state.clear()
+    st.rerun()
 
 # --- 5. 模組內容 ---
 if choice == "庫存報表":
     st.subheader("📦 雲端庫存狀態")
     p_df = get_data("products")
-    if p_df.empty: st.info("尚無商品"); st.stop()
+    if p_df.empty: 
+        st.info("尚無商品")
+        st.stop()
     
     cols = st.columns(2)
     for idx, row in p_df.iterrows():
         s = get_detailed_stats(row['name'])
         with cols[idx % 2]:
             with st.container(border=True):
-                if row['image_data']: st.image(f"data:image/jpeg;base64,{row['image_data']}", use_container_width=True)
+                if row['image_data']: 
+                    st.image(f"data:image/jpeg;base64,{row['image_data']}", use_container_width=True)
                 st.markdown(f"### {row['name']}")
-                if s["is_low"]: st.error(f"🚨 庫存: {s['display']}")
-                else: st.success(f"✅ 庫存: {s['display']}")
+                if s["is_low"]: 
+                    st.error(f"🚨 庫存: {s['display']}")
+                else: 
+                    st.success(f"✅ 庫存: {s['display']}")
 
 elif choice == "交易登記":
     st.subheader("📝 登記異動")
@@ -107,7 +123,8 @@ elif choice == "交易登記":
                 "date": datetime.now().strftime("%Y-%m-%d %H:%M"), "operator": current_user
             }])
             update_data(pd.concat([l_df, new_log], ignore_index=True), "logs")
-            st.success("✅ 雲端同步完成"); st.rerun()
+            st.success("✅ 雲端同步完成")
+            st.rerun()
 
 elif choice == "商品管理":
     st.subheader("⚙️ 商品建檔")
@@ -124,7 +141,9 @@ elif choice == "商品管理":
             if p_i:
                 img = Image.open(p_i).convert("RGB")
                 img.thumbnail((300, 300))
-                buf = io.BytesIO(); img.save(buf, format="JPEG"); b64 = base64.b64encode(buf.getvalue()).decode()
+                buf = io.BytesIO()
+                img.save(buf, format="JPEG")
+                b64 = base64.b64encode(buf.getvalue()).decode()
             
             new_prod = pd.DataFrame([{
                 "name": pn, "barcode": "", "cost": 0, "price": 0, "big_unit": p_b, 
@@ -138,7 +157,8 @@ elif choice == "商品管理":
                 res_df = pd.concat([p_df, new_prod], ignore_index=True)
             
             update_data(res_df, "products")
-            st.success("✅ 雲端存檔成功！"); st.rerun()
+            st.success("✅ 雲端存檔成功！")
+            st.rerun()
 
 elif choice == "歷史紀錄":
     st.subheader("📜 雲端流水帳")
