@@ -13,8 +13,12 @@ st.set_page_config(page_title="AI 智慧 ERP 雲端版", layout="wide", initial_
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def get_data(worksheet):
-    # ttl=0 確保每次讀取都是最新雲端資料，避免登入失敗
-    return conn.read(worksheet=worksheet, ttl=0) 
+    # ttl=0 確保不讀取快取，解決讀不到最新帳密或庫存的問題
+    try:
+        return conn.read(worksheet=worksheet, ttl=0)
+    except Exception as e:
+        st.error(f"❌ 無法讀取工作表 [{worksheet}]，請檢查 Google Sheets 分頁名稱是否正確。")
+        return pd.DataFrame()
 
 def update_data(df, worksheet):
     conn.update(worksheet=worksheet, data=df)
@@ -23,20 +27,24 @@ def update_data(df, worksheet):
 # --- 2. 核心計算工具 ---
 def get_detailed_stats(name):
     p_df = get_data("products")
+    if p_df.empty: return None
+    
     p_rows = p_df[p_df['name'] == name]
     if p_rows.empty: return None
-    p = p_rows.iloc[0] # 修正點：必須指定索引
+    p = p_rows.iloc[0] # 修正點：使用 .iloc[0] 取得 Series
     
-    big_u, small_u, ratio, cost, price, alert = p['big_unit'], p['small_unit'], p['ratio'], p['cost'], p['price'], p['alert_level']
-    ratio = int(ratio) if ratio > 0 else 1
+    big_u = p.get('big_unit', '箱')
+    small_u = p.get('small_unit', '罐')
+    ratio = int(p.get('ratio', 1))
+    cost = p.get('cost', 0)
+    price = p.get('price', 0)
+    alert = p.get('alert_level', 0)
     
     l_df = get_data("logs")
-    # 確保 logs 不為空
-    if l_df.empty:
-        total_small_qty = 0
-    else:
+    total_small_qty = 0
+    
+    if not l_df.empty:
         logs = l_df[l_df['name'] == name]
-        total_small_qty = 0
         for _, row in logs.iterrows():
             real_q = row['qty'] * ratio if row['unit'] == big_u else row['qty']
             if '進貨' in str(row['type']) or '盤點' in str(row['type']):
@@ -59,18 +67,24 @@ if "user" not in st.session_state:
     
     if st.button("登入", use_container_width=True, type="primary"):
         u_df = get_data("users")
-        # 修正點：處理空值並轉為字串
-        u_df['username'] = u_df['username'].fillna('').astype(str).str.strip()
-        u_df['password'] = u_df['password'].fillna('').astype(str).str.strip()
         
-        user_match = u_df[(u_df['username'] == str(u_input)) & (u_df['password'] == str(p_input))]
-        
-        if not user_match.empty:
-            st.session_state["user"] = str(user_match.iloc[0]['username'])
-            st.session_state["role"] = str(user_match.iloc[0]['role'])
-            st.rerun()
-        else: 
-            st.error("❌ 登入失敗：請檢查帳密或 Google Sheets 分頁名稱是否為 'users'")
+        if not u_df.empty:
+            # 修正點：將所有欄位轉為字串並去除空白，防止數字密碼比對失敗
+            u_df['username'] = u_df['username'].astype(str).str.strip()
+            u_df['password'] = u_df['password'].astype(str).str.strip()
+            
+            user_match = u_df[(u_df['username'] == str(u_input).strip()) & 
+                              (u_df['password'] == str(p_input).strip())]
+            
+            if not user_match.empty:
+                # 修正點：正確使用 .iloc[0] 存取資料
+                st.session_state["user"] = str(user_match.iloc[0]['username'])
+                st.session_state["role"] = str(user_match.iloc[0]['role'])
+                st.rerun()
+            else: 
+                st.error("❌ 帳號或密碼錯誤")
+        else:
+            st.error("❌ 雲端資料庫連線失敗，請檢查 Secrets 網址與權限")
     st.stop()
 
 current_user, current_role = st.session_state["user"], st.session_state["role"]
@@ -93,6 +107,7 @@ if choice == "庫存報表":
         cols = st.columns(2)
         for idx, row in p_df.iterrows():
             s = get_detailed_stats(row['name'])
+            if not s: continue
             with cols[idx % 2]:
                 with st.container(border=True):
                     if 'image_data' in row and row['image_data']: 
@@ -109,22 +124,21 @@ elif choice == "交易登記":
     else:
         target = st.selectbox("選定商品", p_df['name'])
         s = get_detailed_stats(target)
-        st.info(f"當前庫存：{s['display']}")
-        
-        with st.form("trade_form"):
-            tt = st.radio("類型", ["進貨", "出貨"], horizontal=True)
-            tu = st.selectbox("單位", [s["big_u"], s["small_u"]])
-            tq = st.number_input("數量", min_value=1, step=1)
-            if st.form_submit_button("確認提交", use_container_width=True):
-                l_df = get_data("logs")
-                new_log = pd.DataFrame([{
-                    "id": len(l_df)+1, "name": target, "type": tt, "qty": tq, "unit": tu,
-                    "price_at_time": s["price"] if tt=="出貨" else s["cost"],
-                    "date": datetime.now().strftime("%Y-%m-%d %H:%M"), "operator": current_user
-                }])
-                update_data(pd.concat([l_df, new_log], ignore_index=True), "logs")
-                st.success("✅ 雲端同步完成")
-                st.rerun()
+        if s:
+            st.info(f"當前庫存：{s['display']}")
+            with st.form("trade_form"):
+                tt = st.radio("類型", ["進貨", "出貨"], horizontal=True)
+                tu = st.selectbox("單位", [s["big_u"], s["small_u"]])
+                tq = st.number_input("數量", min_value=1, step=1)
+                if st.form_submit_button("確認提交", use_container_width=True):
+                    l_df = get_data("logs")
+                    new_log = pd.DataFrame([{
+                        "id": len(l_df)+1, "name": target, "type": tt, "qty": tq, "unit": tu,
+                        "price_at_time": s["price"] if tt=="出貨" else s["cost"],
+                        "date": datetime.now().strftime("%Y-%m-%d %H:%M"), "operator": current_user
+                    }])
+                    update_data(pd.concat([l_df, new_log], ignore_index=True), "logs")
+                    st.success("✅ 雲端同步完成"); st.rerun()
 
 elif choice == "商品管理":
     st.subheader("⚙️ 商品建檔")
@@ -136,7 +150,7 @@ elif choice == "商品管理":
         p_b = c1.text_input("大單位", "箱")
         p_s = c2.text_input("小單位", "罐")
         p_r = c3.number_input("換算比", min_value=1, value=1)
-        al = st.number_input("低庫存預警值(小單位計)", 5)
+        al = st.number_input("低庫存預警值", 5)
         p_i = st.file_uploader("商品圖片")
         
         if st.form_submit_button("💾 儲存到雲端"):
@@ -144,29 +158,19 @@ elif choice == "商品管理":
             if p_i:
                 img = Image.open(p_i).convert("RGB")
                 img.thumbnail((300, 300))
-                buf = io.BytesIO()
-                img.save(buf, format="JPEG")
-                b64 = base64.b64encode(buf.getvalue()).decode()
+                buf = io.BytesIO(); img.save(buf, format="JPEG"); b64 = base64.b64encode(buf.getvalue()).decode()
             
             new_prod = pd.DataFrame([{
                 "name": pn, "barcode": "", "cost": 0, "price": 0, "big_unit": p_b, 
                 "small_unit": p_s, "ratio": p_r, "alert_level": al, "image_data": b64
             }])
             
-            if mode == "+ 新增":
-                res_df = pd.concat([p_df, new_prod], ignore_index=True)
-            else:
-                p_df = p_df[p_df['name'] != mode]
-                res_df = pd.concat([p_df, new_prod], ignore_index=True)
-            
+            res_df = pd.concat([p_df[p_df['name'] != mode], new_prod], ignore_index=True) if mode != "+ 新增" else pd.concat([p_df, new_prod], ignore_index=True)
             update_data(res_df, "products")
-            st.success("✅ 雲端存檔成功！")
-            st.rerun()
+            st.success("✅ 雲端存檔成功！"); st.rerun()
 
 elif choice == "歷史紀錄":
     st.subheader("📜 雲端流水帳")
     l_df = get_data("logs")
-    if l_df.empty:
-        st.info("尚無交易紀錄")
-    else:
-        st.dataframe(l_df.sort_values("id", ascending=False), use_container_width=True)
+    if l_df.empty: st.info("尚無交易紀錄")
+    else: st.dataframe(l_df.sort_values("id", ascending=False), use_container_width=True)
