@@ -14,7 +14,8 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 
 def get_data(worksheet):
-    return conn.read(worksheet=worksheet, ttl="0s") # ttl=0 確保每次讀取都是最新
+    # 移除 ttl 試試看，這會使用預設快取設定
+    return conn.read(worksheet=worksheet) 
 
 def update_data(df, worksheet):
     conn.update(worksheet=worksheet, data=df)
