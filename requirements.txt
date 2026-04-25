@@ -3,6 +3,6 @@ pandas
 Pillow
 google-generativeai>=0.5.0
 reportlab
-st-gsheets-connection==0.0.36
-Plotly
 st-gsheets-connection
+pandas
+Pillow
