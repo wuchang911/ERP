@@ -10,7 +10,8 @@ from datetime import datetime
 st.set_page_config(page_title="AI 智慧 ERP 雲端版", layout="wide", initial_sidebar_state="collapsed")
 
 # 建立 Google Sheets 連線
-conn = st.connection("gsheets", type=GSheetsConnection)
+conn = st.connection("gsheets", type=GSheetsConnection, spreadsheet="https://docs.google.com/spreadsheets/d/10AtDBICff1RUQJm2TX7yj8FaqzZhREnvWnr9_bpwDHk/edit?usp=drivesdk")
+
 
 def get_data(worksheet):
     return conn.read(worksheet=worksheet, ttl="0s") # ttl=0 確保每次讀取都是最新
